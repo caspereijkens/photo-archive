@@ -1,0 +1,7 @@
+{{ define "nextbutton" }}
+{{ if eq .Last false }}
+<a href="{{ .NextURL }}" class="navigation-button">
+    Next
+</a>
+{{ end }}
+{{ end }}

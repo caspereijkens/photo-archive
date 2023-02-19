@@ -1,0 +1,9 @@
+{{ define "taggallery" }}
+<div class="tagrep-container">
+{{ range $index, $representative := .Posts }}
+  <a href="/archive?tag={{ index $representative.Tags 0 }}">
+    <img class="tagrep" src="/blob/{{ $representative.ImageURL }}">
+  </a>
+{{ end }}
+</div>
+{{ end }}

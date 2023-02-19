@@ -1,0 +1,15 @@
+{{define "navbar"}}
+<header>
+    <nav style="display: flex; justify-content: flex-end;">
+        <button style="margin-right: 10px;"><a href="/">Home</a></button>
+        <button style="margin-right: 10px;"><a href="/archive">Archive</a></button>
+        <button style="margin-right: 10px;"><a href="/contact">Contact</a></button>
+        {{ if eq true . }}
+        <button style="margin-right: 10px;"><a href="/logout">Logout</a></button>
+        <button style="margin-right: 10px;"><a href="/upload">Upload</a></button>
+        {{ else }}
+        <button style="margin-right: 10px;"><a href="/login">Login</a></button>
+        {{ end }}
+    </nav>
+</header>
+{{end}}

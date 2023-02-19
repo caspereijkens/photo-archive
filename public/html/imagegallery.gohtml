@@ -1,0 +1,42 @@
+{{ define "imagegallery" }}
+{{ $loggedin := eq true .LoggedIn }}
+<div class="container">
+{{ range $index, $post := .Posts }}
+<div class="list-item-container">
+  <div class="list-item">
+    <div>
+      <h2 style="display: inline-block;">{{ $post.Title }}</h2>
+      <a href="/archive?year={{ $post.Year }}" style="display: inline-block; float: right;" class="button">
+        {{ $post.Year }}
+      </a>
+    </div>
+    
+    <a href="/blob/{{ $post.ImageURL }}">
+      <img src="/blob/{{ $post.ImageURL }}">
+    </a>
+
+    <div>
+    {{ range $tag := $post.Tags }}
+      <a href="/archive?tag={{ $tag }}" class="tag">
+        {{ $tag }}
+      </a>
+    {{ end }}
+    </div>
+    
+    {{ if eq true $loggedin }}
+    <div class="buttons">
+    <form action="/delete/{{ $post.Id }}" method="POST" enctype="application/x-www-form-urlencoded">
+      <input type="hidden" id="origin" name="origin" value="">
+      <button type="submit">delete</button>
+    </form>
+    <a href="/update/{{ $post.Id }}">
+      <button type="submit">update</button>
+    </a>
+    </div>
+    {{ end }}
+
+  </div>
+  </div>
+{{ end }}
+</div>
+{{ end }}

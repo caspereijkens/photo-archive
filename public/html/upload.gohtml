@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+
+{{ template "head" "UPLOAD" }}
+
+<body>
+
+{{template "navbar" .LoggedIn }}
+
+<h1>Upload</h1>
+
+<form action="" method="POST" enctype="multipart/form-data" id="tagForm">
+  <input type="hidden" name="tags">
+  <input type="file" name="file" multiple="multiple">
+  <label for="year">Year:</label>
+  <input type="number" id="year" name="year" min="1950" max="{{ .CurrentYear }}">
+  <div id="tagFields">
+    <label for="tag1">Tag 1:</label>
+    <input type="text" id="tag1" name="tag1">
+  </div>
+  <button type="button" onclick="addTagField()">Add Another Tag</button>
+  <input type="submit" onclick="prepareTags()">
+</form>
+</body>
+</html>
+
+<script>
+  var tagFields = [document.querySelector('input[name="tag1"]')];
+
+  function addTagField() {
+    var tagFieldsContainer = document.getElementById("tagFields");
+    var newTagField = document.createElement("div");
+    var newLabel = document.createElement("label");
+    var newInput = document.createElement("input");
+    var tagNum = tagFields.length + 1;
+    newLabel.setAttribute("for", "tag" + tagNum);
+    newLabel.innerHTML = "Tag " + tagNum + ":";
+    newInput.setAttribute("type", "text");
+    newInput.setAttribute("id", "tag" + tagNum);
+    newInput.setAttribute("name", "tag" + tagNum);
+    newTagField.appendChild(newLabel);
+    newTagField.appendChild(newInput);
+    tagFields.push(newInput);
+    tagFieldsContainer.appendChild(newTagField);
+  }
+
+  function prepareTags() {
+    var tagsInput = document.querySelector('input[name="tags"]');
+    tagsInput.value = tagFields.map(function(input) {
+      return input.value;
+    }).join(',');
+  }
+</script>

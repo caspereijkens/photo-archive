@@ -1,0 +1,7 @@
+{{ define "yearnav" }}
+{{ range . }}
+<div>
+<button><a href="/year/{{ . }}">{{ . }}</a></button>
+</div>
+{{ end }}
+{{ end }}

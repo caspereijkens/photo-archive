@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+
+{{ template "head" "JOEP EIJKENS" }}
+
+<body>
+
+{{template "navbar" .LoggedIn }}
+<h1>Onderwerpen</h1>
+{{ template "taggallery" . }}
+<hr>
+</body>
+</html>

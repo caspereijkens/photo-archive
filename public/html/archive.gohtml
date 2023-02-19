@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+
+{{ template "head" "GALLERY" }}
+
+<body>
+
+{{template "navbar" .LoggedIn }}
+
+<h1>Gallery</h1>
+
+{{ template "imagegallery" . }}
+
+<div style="text-align: center;">
+{{ template "previousbutton" .}}
+{{ template "nextbutton" .}}
+</div>
+</body>
+</html>

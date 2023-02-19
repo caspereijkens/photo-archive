@@ -1,0 +1,7 @@
+{{ define "previousbutton" }}
+{{ if eq .First false }}
+<a href="{{ .PrevURL }}" class="navigation-button">
+    Previous
+</a>
+{{ end }}
+{{ end }}

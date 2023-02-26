@@ -1,13 +1,20 @@
 <!doctype html>
 <html lang="en">
 
-{{ template "head" "GALLERY" }}
+{{ template "head" "Archief" }}
 
 <body>
 
 {{template "navbar" .LoggedIn }}
 
-<h1>Gallery</h1>
+<h1>Archief</h1>
+{{ if ne .Tag "" }}
+<h2>Onderwerp: {{ .Tag }}</h2>
+{{ else }}
+<h2>Alle onderwerpen</h2>
+{{ end }}
+
+{{ template "years" . }}
 
 {{ template "imagegallery" . }}
 

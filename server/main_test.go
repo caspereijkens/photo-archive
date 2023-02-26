@@ -2,14 +2,20 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
+	"html/template"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,19 +25,19 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// func init() {
-// 	var err error
-// 	// db, err = sql.Open("postgres", os.Getenv("POSTGRES_DATA_SOURCE_NAME"))
-// 	db, err = sql.Open("postgres", "postgres://postgres:password@localhost/joepeijkens?sslmode=disable")
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	if err = db.Ping(); err != nil {
-// 		panic(err)
-// 	}
-// 	log.Println("You connected to your database.")
-// 	publicTpl = template.Must(template.ParseGlob("../public/html/*"))
-// }
+func init() {
+	var err error
+	// db, err = sql.Open("postgres", os.Getenv("POSTGRES_DATA_SOURCE_NAME"))
+	db, err = sql.Open("postgres", "postgres://postgres:password@localhost/joepeijkens?sslmode=disable")
+	if err != nil {
+		panic(err)
+	}
+	if err = db.Ping(); err != nil {
+		panic(err)
+	}
+	log.Println("You connected to your database.")
+	publicTpl = template.Must(template.ParseGlob("../public/html/*"))
+}
 
 func TestIndexHandler(t *testing.T) {
 
@@ -742,11 +748,43 @@ func TestCreateTags(t *testing.T) {
 }
 
 func TestParseTags(t *testing.T) {
-	inputTags := "1,2,3,4,5,6,7,8,9,10"
-	outputTags := parseTags(inputTags)
+	// define test cases
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"case1", "tag1, tag2, tag3", []string{"tag1", "tag2", "tag3"}},
+		{"case2", "TaG1, TaG2", []string{"tag1", "tag2"}},
+		{"case3", "tag1", []string{"tag1"}},
+		{"case4", "", []string{""}},
+		{"case5", " tag1", []string{"tag1"}},
+		{"case6", " tag1 ", []string{"tag1"}},
+		{"case7", "tag1 ", []string{"tag1"}},
+	}
 
-	if len(outputTags) != 10 {
-		t.Error("error parsing tags")
+	// iterate over test cases and run assertions
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseTags(tt.input)
+
+			// check length of resulting array
+			if len(got) != len(tt.want) {
+				t.Errorf("parseTags() = %v, want %v", got, tt.want)
+			}
+
+			// check contents of resulting array
+			for i := 0; i < len(got); i++ {
+				if got[i] != tt.want[i] {
+					t.Errorf("parseTags() = %v, want %v", got, tt.want)
+				}
+			}
+
+			// check that the resulting array has the same type as the expected result
+			if reflect.TypeOf(got) != reflect.TypeOf(tt.want) {
+				t.Errorf("parseTags() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -893,6 +931,79 @@ func TestListPost(t *testing.T) {
 
 }
 
+func TestListYears(t *testing.T) {
+	createTestUser()
+	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	tag1 := []string{"tag1"}
+	tag2 := []string{"tag2"}
+	tag12 := []string{"tag1", "tag2"}
+	tag3 := []string{"tag3"}
+
+	postId1, _ := createPost("image1", 2022, 1)
+	createTags(postId1, tag1)
+
+	postId3, _ := createPost("image3", 2023, 1)
+	createTags(postId3, tag1)
+
+	postId2, _ := createPost("image2", 1999, 1)
+	createTags(postId2, tag2)
+
+	postId4, _ := createPost("image4", 1995, 1)
+	createTags(postId4, tag2)
+
+	postId5, _ := createPost("image5", 2015, 1)
+	createTags(postId5, tag12)
+
+	postId6, _ := createPost("image6", 2000, 1)
+	createTags(postId6, tag12)
+
+	postId7, _ := createPost("image7", 2017, 1)
+	createTags(postId7, tag12)
+
+	postId8, _ := createPost("image8", 2011, 1)
+	createTags(postId8, tag3)
+
+	expectedYears1 := []int{2000, 2015, 2017, 2022, 2023}
+	expectedYears2 := []int{1995, 1999, 2000, 2015, 2017}
+	expectedYears12 := []int{1995, 1999, 2000, 2015, 2017, 2022, 2023}
+	expectedYearsAll := []int{1995, 1999, 2000, 2011, 2015, 2017, 2022, 2023}
+
+	years, err := listYears(tag1)
+	if err != nil {
+		t.Errorf("Error listing years: %v", err)
+	}
+	if !sameContents(years, expectedYears1) {
+		t.Errorf("Error listing years with tag 1: %v", err)
+	}
+
+	years, err = listYears(tag2)
+	if err != nil {
+		t.Errorf("Error listing years: %v", err)
+	}
+	if !sameContents(years, expectedYears2) {
+		t.Errorf("Error listing years with tag 2: %v", err)
+	}
+
+	years, err = listYears(tag12)
+	if err != nil {
+		t.Errorf("Error listing years: %v", err)
+	}
+	if !sameContents(years, expectedYears12) {
+		t.Errorf("Error listing years with tags 1 and 2: %v", err)
+	}
+
+	years, err = listYears([]string{""})
+	if err != nil {
+		t.Errorf("Error listing years: %v", err)
+	}
+	if !sameContents(years, expectedYearsAll) {
+		t.Errorf("Error listing years without tag: %v", err)
+	}
+
+}
+
 func TestUpdatePost(t *testing.T) {
 	createTestUser()
 	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
@@ -977,33 +1088,16 @@ func TestRoundToNearest(t *testing.T) {
 	}
 }
 
-func TestParseFilter(t *testing.T) {
-	tests := []struct {
-		year     int
-		tag      string
-		expected string
-	}{
-		{0, "", ""},
-		{0, "tag1", "WHERE tags.name='tag1'"},
-		{2022, "", "WHERE posts.year=2022"},
-		{2022, "tag1", "WHERE posts.year=2022 AND tags.name='tag1'"},
-	}
-
-	for _, test := range tests {
-		result := parseArchiveQuery(test.year, test.tag)
-		if result != test.expected {
-			t.Errorf("parseFilter(%d, %s) = %s, expected %s", test.year, test.tag, result, test.expected)
-		}
-	}
-}
-
 func TestCreateNavigationProperties(t *testing.T) {
 	limit, offset, year := 10, 20, 2022
 	tag := "example"
 
-	prevProps, nextProps := createNavigationURLs(limit, offset, year, tag)
+	props, prevProps, nextProps := createProperties(limit, offset, year, tag)
 
 	// Check that the returned strings contain the correct values
+	if props != "limit=10&offset=20&year=2022&tag=example" {
+		t.Errorf("Incorrect prevProperties value: %s", prevProps)
+	}
 	if prevProps != "limit=10&offset=10&year=2022&tag=example" {
 		t.Errorf("Incorrect prevProperties value: %s", prevProps)
 	}
@@ -1013,7 +1107,10 @@ func TestCreateNavigationProperties(t *testing.T) {
 
 	// Test the function without a tag
 	tag = ""
-	prevProps, nextProps = createNavigationURLs(limit, offset, year, tag)
+	props, prevProps, nextProps = createProperties(limit, offset, year, tag)
+	if props != "limit=10&offset=20&year=2022" {
+		t.Errorf("Incorrect prevProperties value: %s", prevProps)
+	}
 	if prevProps != "limit=10&offset=10&year=2022" {
 		t.Errorf("Incorrect prevProperties value without tag: %s", prevProps)
 	}
@@ -1023,12 +1120,110 @@ func TestCreateNavigationProperties(t *testing.T) {
 
 	// Test the function without a year or tag
 	year, tag = 0, ""
-	prevProps, nextProps = createNavigationURLs(limit, offset, year, tag)
+	props, prevProps, nextProps = createProperties(limit, offset, year, tag)
+	if props != "limit=10&offset=20" {
+		t.Errorf("Incorrect prevProperties value: %s", prevProps)
+	}
 	if prevProps != "limit=10&offset=10" {
 		t.Errorf("Incorrect prevProperties value without year or tag: %s", prevProps)
 	}
 	if nextProps != "limit=10&offset=30" {
 		t.Errorf("Incorrect nextProperties value without year or tag: %s", nextProps)
+	}
+}
+
+func TestQueryURL(t *testing.T) {
+	tests := []struct {
+		name           string
+		query          string
+		expectedLimit  int
+		expectedOffset int
+		expectedYear   int
+		expectedTag    string
+		expectedErr    error
+	}{
+		{
+			name:           "default parameters",
+			query:          "",
+			expectedLimit:  12,
+			expectedOffset: 0,
+			expectedYear:   0,
+			expectedTag:    "",
+			expectedErr:    nil,
+		},
+		{
+			name:           "custom parameters",
+			query:          "limit=20&offset=10&year=2022&tag=test",
+			expectedLimit:  24,
+			expectedOffset: 0,
+			expectedYear:   2022,
+			expectedTag:    "test",
+			expectedErr:    nil,
+		},
+		{
+			name:           "invalid limit parameter",
+			query:          "limit=abc&year=2022&tag=test",
+			expectedLimit:  12,
+			expectedOffset: 0,
+			expectedYear:   2022,
+			expectedTag:    "test",
+			expectedErr:    strconv.ErrSyntax,
+		},
+		{
+			name:           "invalid offset parameter",
+			query:          "offset=xyz&year=2022&tag=test",
+			expectedLimit:  12,
+			expectedOffset: 0,
+			expectedYear:   2022,
+			expectedTag:    "test",
+			expectedErr:    strconv.ErrSyntax,
+		},
+		{
+			name:           "multiple tags",
+			query:          "tag=testoverride&offset=xyz&year=2022&tag=test",
+			expectedLimit:  12,
+			expectedOffset: 0,
+			expectedYear:   2022,
+			expectedTag:    "testoverride",
+			expectedErr:    strconv.ErrSyntax,
+		},
+		{
+			name:           "multiple years",
+			query:          "year=2011&offset=xyz&year=2022&tag=test",
+			expectedLimit:  12,
+			expectedOffset: 0,
+			expectedYear:   2011,
+			expectedTag:    "test",
+			expectedErr:    strconv.ErrSyntax,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// create a sample request with query parameters
+			req := &http.Request{
+				URL: &url.URL{
+					RawQuery: tt.query,
+				},
+			}
+
+			// call the queryURL function to extract query parameters
+			limit, offset, year, tag, _ := queryURL(req)
+
+			// check if the extracted parameters are correct
+			if limit != tt.expectedLimit {
+				t.Errorf("queryURL returned an incorrect limit: expected %d, got %d", tt.expectedLimit, limit)
+			}
+			if offset != tt.expectedOffset {
+				t.Errorf("queryURL returned an incorrect offset: expected %d, got %d", tt.expectedOffset, offset)
+			}
+			if year != tt.expectedYear {
+				t.Errorf("queryURL returned an incorrect year: expected %d, got %d", tt.expectedYear, year)
+			}
+			if tag != tt.expectedTag {
+				t.Errorf("queryURL returned an incorrect tag: expected %s, got %s", tt.expectedTag, tag)
+			}
+		})
 	}
 }
 
@@ -1039,4 +1234,29 @@ func contains(s []string, e string) bool {
 		}
 	}
 	return false
+}
+
+func sameContents(slice1, slice2 []int) bool {
+	if len(slice1) != len(slice2) {
+		return false
+	}
+
+	// Make a copy of slice1 and sort it
+	sortedSlice1 := make([]int, len(slice1))
+	copy(sortedSlice1, slice1)
+	sort.Ints(sortedSlice1)
+
+	// Make a copy of slice2 and sort it
+	sortedSlice2 := make([]int, len(slice2))
+	copy(sortedSlice2, slice2)
+	sort.Ints(sortedSlice2)
+
+	// Compare the sorted slices
+	for i, val := range sortedSlice1 {
+		if val != sortedSlice2[i] {
+			return false
+		}
+	}
+
+	return true
 }

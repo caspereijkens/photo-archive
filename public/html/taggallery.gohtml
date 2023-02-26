@@ -3,6 +3,7 @@
 {{ range $index, $representative := .Posts }}
   <a href="/archive?tag={{ index $representative.Tags 0 }}">
     <img class="tagrep" src="/blob/{{ $representative.ImageURL }}">
+    <h3>{{ index $representative.Tags 0 }}</h3>
   </a>
 {{ end }}
 </div>

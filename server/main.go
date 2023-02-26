@@ -56,14 +56,16 @@ func init() {
 
 func archiveHandler(w http.ResponseWriter, req *http.Request) {
 	type data struct {
-		Posts    []Post
-		LoggedIn bool
-		First    bool
-		Last     bool
-		PrevURL  string
-		NextURL  string
+		Posts          []Post
+		LoggedIn       bool
+		First          bool
+		Last           bool
+		Properties     string
+		PrevProperties string
+		NextProperties string
+		Years          []int
+		Tag            string
 	}
-	_, loggedIn := getLoginStatus(req)
 	limit, offset, year, tag, err := queryURL(req)
 	if err != nil {
 		http.Error(w, "invalid limit and/or offset", http.StatusForbidden)
@@ -72,14 +74,22 @@ func archiveHandler(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		http.Error(w, "error retrieving posts from the database", http.StatusInternalServerError)
 	}
-	prevURL, nextURL := createNavigationURLs(limit, offset, year, tag)
+	_, loggedIn := getLoginStatus(req)
+	years, err := listYears([]string{tag})
+	if err != nil {
+		http.Error(w, "error retrieving years from the database", http.StatusInternalServerError)
+	}
+	properties, prevProperties, nextProperties := createProperties(limit, offset, year, tag)
 	d := data{
-		Posts:    posts,
-		LoggedIn: loggedIn,
-		First:    first,
-		Last:     last,
-		PrevURL:  prevURL,
-		NextURL:  nextURL,
+		Posts:          posts,
+		LoggedIn:       loggedIn,
+		First:          first,
+		Last:           last,
+		Properties:     properties,
+		PrevProperties: prevProperties,
+		NextProperties: nextProperties,
+		Years:          years,
+		Tag:            tag,
 	}
 	err = publicTpl.ExecuteTemplate(w, "archive.gohtml", d)
 	if err != nil {
@@ -174,7 +184,7 @@ func uploadHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func createNavigationURLs(limit, offset, year int, tag string) (string, string) {
+func createProperties(limit, offset, year int, tag string) (string, string, string) {
 	prevOffset, nextOffset := navigateOffsets(limit, offset)
 
 	var filterProperties string
@@ -184,10 +194,12 @@ func createNavigationURLs(limit, offset, year int, tag string) (string, string) 
 	if tag != "" {
 		filterProperties += "&tag=" + url.QueryEscape(tag)
 	}
-	prevURL := "/archive?limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(prevOffset) + filterProperties
-	nextURL := "/archive?limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(nextOffset) + filterProperties
 
-	return prevURL, nextURL
+	properties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(offset) + filterProperties
+	prevProperties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(prevOffset) + filterProperties
+	nextProperties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(nextOffset) + filterProperties
+
+	return properties, prevProperties, nextProperties
 }
 
 func updateHandler(w http.ResponseWriter, req *http.Request) {
@@ -539,23 +551,81 @@ func listPosts(limit, offset int, year int, tag string) ([]Post, bool, bool, err
 	return posts, first, last, nil
 }
 
+func listYears(tags []string) ([]int, error) {
+	var year int
+	var years []int
+	var filter string
+	var rows *sql.Rows
+
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("tags are empty")
+	} else if len(tags) == 1 && tags[0] == "" {
+		filter = ""
+	} else {
+		filter = `
+			JOIN tagmap ON posts.id = tagmap.post_id 
+			WHERE tagmap.tag_id IN (
+				SELECT id FROM tags WHERE name IN ('` + strings.Join(tags, "','") + `')
+			)
+		`
+	}
+
+	query := fmt.Sprintf(`
+        SELECT DISTINCT posts.year 
+        FROM posts 
+		%s
+        ORDER BY posts.year ASC;
+    `, filter)
+	// Prepare the query
+	stmt, err := db.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	// Execute the query
+	rows, err = stmt.Query()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Iterate over the results
+	for rows.Next() {
+		err := rows.Scan(&year)
+		if err != nil {
+			return nil, err
+		}
+		years = append(years, year)
+	}
+
+	// Check for any errors during iteration
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return years, nil
+}
+
 func listTagReps() ([]Post, error) {
-	var tag string
+	var tags []string
 	posts := make([]Post, 0)
 	rows, err := db.Query(`
 		SELECT
-		posts.id as post_id,
-		posts.minio_url as file,
-		tags.name AS tag
+			MAX(posts.id) AS post_id,
+			posts.minio_url AS file,
+			ARRAY_AGG(tags.name) AS tags
 		FROM
-		(
-			SELECT tag_id, MAX(post_id) AS last_post_id
-			FROM tagmap
-			GROUP BY tag_id
-		) AS latest_post
-		JOIN tags ON tags.id = latest_post.tag_id
-		JOIN posts ON posts.id = latest_post.last_post_id
-		ORDER BY tags.name, posts.created_at DESC;
+			(
+				SELECT tag_id, MAX(post_id) AS last_post_id
+				FROM tagmap
+				GROUP BY tag_id
+			) AS latest_post
+			JOIN tags ON tags.id = latest_post.tag_id
+			JOIN posts ON posts.id = latest_post.last_post_id
+		GROUP BY
+			posts.minio_url
+		ORDER BY
+			tags, MAX(posts.created_at) DESC;
 		`)
 	if err != nil {
 		log.Println(err)
@@ -564,11 +634,11 @@ func listTagReps() ([]Post, error) {
 	defer rows.Close()
 	for rows.Next() {
 		post := Post{}
-		err := rows.Scan(&post.Id, &post.ImageURL, &tag)
+		err := rows.Scan(&post.Id, &post.ImageURL, pq.Array(&tags))
 		if err != nil {
 			return posts, err
 		}
-		post.Tags = []string{tag}
+		post.Tags = tags
 		posts = append(posts, post)
 	}
 	err = rows.Err()
@@ -577,37 +647,42 @@ func listTagReps() ([]Post, error) {
 
 func queryURL(req *http.Request) (int, int, int, string, error) {
 	var limit int = 12
-	var offset int = 0
+	var limitOverride int
+	var offset int
+	var offsetOverride int
+	var year int
+	var yearOverride int
 	var tag string
 	var err error
-	var year int
 
 	q := req.URL.Query()
 
-	if reqLimit, ok := q["limit"]; ok {
-		limit, err = strconv.Atoi(reqLimit[0])
-		if err != nil {
-			return limit, offset, year, tag, err
-		}
-		limit = roundToNearestLimit(limit)
-	}
-
-	if reqOffset, ok := q["offset"]; ok {
-		offset, err = strconv.Atoi(reqOffset[0])
-		if err != nil {
-			return limit, offset, year, tag, err
-		}
-		offset = floorDivision(offset, limit)
+	if reqTags, ok := q["tag"]; ok {
+		tag = reqTags[0]
 	}
 
 	if reqYear, ok := q["year"]; ok {
-		year, err = strconv.Atoi(reqYear[0])
+		yearOverride, err = strconv.Atoi(reqYear[0])
 		if err != nil {
 			return limit, offset, year, tag, err
 		}
+		year = yearOverride
 	}
-	if reqTags, ok := q["tag"]; ok {
-		tag = reqTags[0]
+
+	if reqLimit, ok := q["limit"]; ok {
+		limitOverride, err = strconv.Atoi(reqLimit[0])
+		if err != nil {
+			return limit, offset, year, tag, err
+		}
+		limit = roundToNearestLimit(limitOverride)
+	}
+
+	if reqOffset, ok := q["offset"]; ok {
+		offsetOverride, err = strconv.Atoi(reqOffset[0])
+		if err != nil {
+			return limit, offset, year, tag, err
+		}
+		offset = floorDivision(offsetOverride, limitOverride)
 	}
 
 	return limit, offset, year, tag, nil
@@ -668,7 +743,7 @@ func storeFiles(req *http.Request) error {
 		if err != nil {
 			return fmt.Errorf("error storing file on S3: %v", err)
 		}
-		minioUrl := objectName // more efficient to store without localhostq
+		minioUrl := objectName
 		postId, err := createPost(minioUrl, year, *userId)
 		if err != nil {
 			return fmt.Errorf("error inserting post in database: %v", err)
@@ -682,7 +757,13 @@ func storeFiles(req *http.Request) error {
 }
 
 func parseTags(tags string) []string {
-	return strings.Split(tags, ",")
+	tagList := strings.Split(tags, ",")
+
+	for i := range tagList {
+		tagList[i] = strings.ToLower(strings.TrimSpace(tagList[i]))
+	}
+
+	return tagList
 }
 
 func createTags(postId *int, tags []string) error {
@@ -773,7 +854,6 @@ func cleanTags(tags []string) []string {
 func queryArchive(tag string, year, limit, offset int) (*sql.Rows, error) {
 	var rows *sql.Rows
 	var err error
-	log.Println("Hello from 1")
 	if year == 0 {
 		if tag == "" {
 			rows, err = db.Query(`
@@ -820,23 +900,16 @@ func queryArchive(tag string, year, limit, offset int) (*sql.Rows, error) {
 				LEFT JOIN tags t ON tm.tag_id = t.id
 				WHERE p.year = $1
 				GROUP BY p.id
-				HAVING count(CASE WHEN t.name = '$2' THEN 1 ELSE NULL END) >= 1
+				HAVING count(CASE WHEN t.name = $2 THEN 1 ELSE NULL END) >= 1
 				ORDER BY p.updated_at DESC
 				LIMIT $3
 				OFFSET $4;
 				`, year, tag, limit+1, offset)
 		}
 	}
-	log.Println(err)
+	if err != nil {
+		log.Printf("Error querying the archive: %v\n", err)
+	}
 
 	return rows, err
 }
-
-// func connectionCounter() {
-// 	var count int
-// 	err := db.QueryRow("SELECT COUNT(*) FROM pg_stat_activity WHERE state != 'idle'").Scan(&count)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	log.Println("Number of concurrent connections:", count)
-// }

@@ -31,7 +31,7 @@
 
 <script>
   var tagFields = [];
-  for (var i = 0; i < {{ len .Post.Tags }}; i++) {
+  for (var i = 1; i <= {{ len .Post.Tags }}; i++) {
     tagFields.push(document.querySelector('input[name="tag' + i + '"]'));
   }
 
@@ -40,7 +40,7 @@
     var newTagField = document.createElement("div");
     var newLabel = document.createElement("label");
     var newInput = document.createElement("input");
-    var tagNum = tagFields.length;
+    var tagNum = tagFields.length + 1;
     newLabel.setAttribute("for", "tag" + tagNum);
     newLabel.innerHTML = "Tag " + tagNum + ":";
     newInput.setAttribute("type", "text");

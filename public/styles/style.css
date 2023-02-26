@@ -96,3 +96,16 @@ a.navigation-button {
   object-fit: cover;
 }
 
+.tagrep-container a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.tagrep-container a h3 {
+  text-align: left;
+  margin: 0;
+  font-size: initial;
+  font-weight: normal;
+}
+

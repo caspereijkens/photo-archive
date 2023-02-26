@@ -1,0 +1,6 @@
+{{ define "years" }}
+{{ $properties := .Properties }}
+{{ range .Years }}
+<a href="/archive?year={{ . }}&{{ $properties }}">{{ . }}</a>
+{{ end }}
+{{ end }}

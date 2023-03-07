@@ -26,7 +26,12 @@ import (
 
 var db *sql.DB
 var sessionStore = make(map[string]int)
-var publicTpl *template.Template
+
+// define a custom function for addition
+var fm = template.FuncMap{
+	"add": func(a, b int) int { return a + b },
+}
+var publicTpl = template.New("public").Funcs(fm)
 
 type Post struct {
 	Id          int
@@ -51,7 +56,7 @@ func init() {
 		panic(err)
 	}
 	log.Println("You connected to your database.")
-	publicTpl = template.Must(template.ParseGlob("public/html/*"))
+	publicTpl = template.Must(publicTpl.ParseGlob("public/html/*"))
 }
 
 func archiveHandler(w http.ResponseWriter, req *http.Request) {

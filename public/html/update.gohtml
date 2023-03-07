@@ -17,7 +17,7 @@
   <input type="number" id="year" name="year" min="1950" max="{{ .CurrentYear }}" value="{{ .Post.Year }}">
 {{ range $index, $tag := .Post.Tags }}
   <div id="tagFields">
-    <label for="tag{{ $index }}">Tag {{ $index }}:</label>
+    <label for="tag{{ $index }}">Tag {{ add $index 1 }}:</label>
     <input type="text" id="tag{{ $index }}" name="tag{{ $index }}" value="{{ $tag }}">
   </div>
 {{ end }}
@@ -31,7 +31,7 @@
 
 <script>
   var tagFields = [];
-  for (var i = 1; i <= {{ len .Post.Tags }}; i++) {
+  for (var i = 0; i < {{ len .Post.Tags }}; i++) {
     tagFields.push(document.querySelector('input[name="tag' + i + '"]'));
   }
 
@@ -40,7 +40,7 @@
     var newTagField = document.createElement("div");
     var newLabel = document.createElement("label");
     var newInput = document.createElement("input");
-    var tagNum = tagFields.length + 1;
+    var tagNum = tagFields.length;
     newLabel.setAttribute("for", "tag" + tagNum);
     newLabel.innerHTML = "Tag " + tagNum + ":";
     newInput.setAttribute("type", "text");

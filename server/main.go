@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"log"
 	"math"
@@ -14,6 +13,8 @@ import (
 	"net/mail"
 	"net/url"
 	"path/filepath"
+	"project/server/config"
+	"project/server/posts"
 	"strconv"
 	"strings"
 	"time"
@@ -24,44 +25,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var db *sql.DB
 var sessionStore = make(map[string]int)
-
-// define a custom function for addition
-var fm = template.FuncMap{
-	"add": func(a, b int) int { return a + b },
-}
-var publicTpl = template.New("public").Funcs(fm)
-
-type Post struct {
-	Id          int
-	ImageURL    string
-	Year        int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	Edited      bool
-	UserId      int
-	Title       string
-	Description string
-	Tags        []string
-}
-
-func init() {
-	var err error
-	db, err = sql.Open("postgres", "postgres://casper:password@db/joepeijkens?sslmode=disable")
-	if err != nil {
-		panic(err)
-	}
-	if err = db.Ping(); err != nil {
-		panic(err)
-	}
-	log.Println("You connected to your database.")
-	publicTpl = template.Must(publicTpl.ParseGlob("public/html/*"))
-}
 
 func archiveHandler(w http.ResponseWriter, req *http.Request) {
 	type data struct {
-		Posts          []Post
+		Posts          []posts.Post
 		LoggedIn       bool
 		First          bool
 		Last           bool
@@ -96,7 +64,7 @@ func archiveHandler(w http.ResponseWriter, req *http.Request) {
 		Years:          years,
 		Tag:            tag,
 	}
-	err = publicTpl.ExecuteTemplate(w, "archive.gohtml", d)
+	err = config.TPL.ExecuteTemplate(w, "archive.gohtml", d)
 	if err != nil {
 		http.Error(w, "error loading page", http.StatusInternalServerError)
 	}
@@ -117,7 +85,7 @@ func loginHandler(w http.ResponseWriter, req *http.Request) {
 		}
 		http.Redirect(w, req, "/upload", http.StatusSeeOther)
 	}
-	err := publicTpl.ExecuteTemplate(w, "login.gohtml", nil)
+	err := config.TPL.ExecuteTemplate(w, "login.gohtml", nil)
 	if err != nil {
 		http.Error(w, "error templating page", http.StatusInternalServerError)
 	}
@@ -143,7 +111,7 @@ func registerHandler(w http.ResponseWriter, req *http.Request) {
 		http.Redirect(w, req, "/login", http.StatusSeeOther)
 		return
 	}
-	err := publicTpl.ExecuteTemplate(w, "register.gohtml", nil)
+	err := config.TPL.ExecuteTemplate(w, "register.gohtml", nil)
 	if err != nil {
 		http.Error(w, "error templating page", http.StatusInternalServerError)
 	}
@@ -183,7 +151,7 @@ func uploadHandler(w http.ResponseWriter, req *http.Request) {
 		LoggedIn:    loggedIn,
 		CurrentYear: time.Now().Year(),
 	}
-	err := publicTpl.ExecuteTemplate(w, "upload.gohtml", d)
+	err := config.TPL.ExecuteTemplate(w, "upload.gohtml", d)
 	if err != nil {
 		http.Error(w, "error templating page", http.StatusInternalServerError)
 	}
@@ -209,7 +177,7 @@ func createProperties(limit, offset, year int, tag string) (string, string, stri
 
 func updateHandler(w http.ResponseWriter, req *http.Request) {
 	type data struct {
-		Post        Post
+		Post        posts.Post
 		LoggedIn    bool
 		CurrentYear int
 	}
@@ -260,7 +228,7 @@ func updateHandler(w http.ResponseWriter, req *http.Request) {
 		LoggedIn:    loggedIn,
 		CurrentYear: time.Now().Year(),
 	}
-	err = publicTpl.ExecuteTemplate(w, "update.gohtml", d)
+	err = config.TPL.ExecuteTemplate(w, "update.gohtml", d)
 	if err != nil {
 		http.Error(w, "error templating page", http.StatusInternalServerError)
 	}
@@ -297,7 +265,7 @@ func imageHandler(w http.ResponseWriter, req *http.Request) {
 	filename := req.URL.Path[len("/blob/"):]
 
 	// Initialize a Minio client
-	endpoint := "nginx:9000"
+	endpoint := "localhost:9000"
 	accessKeyID := "minioadmin"
 	secretAccessKey := "minioadmin"
 	useSSL := false
@@ -327,7 +295,7 @@ func imageHandler(w http.ResponseWriter, req *http.Request) {
 
 func tagRepHandler(w http.ResponseWriter, req *http.Request) {
 	type data struct {
-		Posts    []Post
+		Posts    []posts.Post
 		LoggedIn bool
 	}
 	_, loggedIn := getLoginStatus(req)
@@ -339,14 +307,14 @@ func tagRepHandler(w http.ResponseWriter, req *http.Request) {
 		Posts:    posts,
 		LoggedIn: loggedIn,
 	}
-	err = publicTpl.ExecuteTemplate(w, "index.gohtml", d)
+	err = config.TPL.ExecuteTemplate(w, "index.gohtml", d)
 	if err != nil {
 		http.Error(w, "error templating page", http.StatusInternalServerError)
 	}
 }
 
 func contactHandler(w http.ResponseWriter, req *http.Request) {
-	err := publicTpl.ExecuteTemplate(w, "contactinfo.gohtml", nil)
+	err := config.TPL.ExecuteTemplate(w, "contactinfo.gohtml", nil)
 	if err != nil {
 		http.Error(w, "error templating page", http.StatusInternalServerError)
 	}
@@ -396,7 +364,7 @@ func verifyRegistration(w http.ResponseWriter, req *http.Request) (*string, *str
 }
 
 func createUser(w http.ResponseWriter, name *string, email *string, hashedPassword []byte, role *string) error {
-	_, err := db.Exec(`
+	_, err := config.DB.Exec(`
 		INSERT INTO users 
 		(NAME,EMAIL,HASHEDPASSWORD,ROLE) 
 		VALUES ($1, $2, $3, $4);`, *name, *email, string(hashedPassword), *role)
@@ -409,7 +377,7 @@ func createUser(w http.ResponseWriter, name *string, email *string, hashedPasswo
 func getUserIdAndHashedPassword(email string) (*int, []byte, error) {
 	var userId int
 	var registeredHashedPassword []byte
-	err := db.QueryRow("SELECT id, hashedpassword FROM users WHERE email=$1;", email).Scan(&userId, &registeredHashedPassword)
+	err := config.DB.QueryRow("SELECT id, hashedpassword FROM users WHERE email=$1;", email).Scan(&userId, &registeredHashedPassword)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -421,7 +389,7 @@ func getUserIdAndHashedPassword(email string) (*int, []byte, error) {
 
 func createPost(minioUrl string, year int, userId int) (*int, error) {
 	var postId int
-	err := db.QueryRow(`
+	err := config.DB.QueryRow(`
 		INSERT INTO posts (MINIO_URL, YEAR, USER_ID) VALUES ($1, $2, $3) RETURNING ID;`,
 		minioUrl, year, userId).Scan(&postId)
 	if err != nil {
@@ -430,8 +398,8 @@ func createPost(minioUrl string, year int, userId int) (*int, error) {
 	return &postId, nil
 }
 
-func updatePost(post Post) error {
-	_, err := db.Exec(`
+func updatePost(post posts.Post) error {
+	_, err := config.DB.Exec(`
 		UPDATE posts 
 		SET UPDATED_AT=NOW(), 
 			EDITED=TRUE, 
@@ -445,7 +413,7 @@ func updatePost(post Post) error {
 }
 
 func updateTags(postId *int, tags []string) error {
-	db.Exec("DELETE FROM tagmap WHERE post_id = $1;", *postId)
+	config.DB.Exec("DELETE FROM tagmap WHERE post_id = $1;", *postId)
 	err := createTags(postId, tags)
 	return err
 }
@@ -506,31 +474,31 @@ func deleteSession(req *http.Request) *http.Cookie {
 }
 
 func deletePost(postId int, userId int) error {
-	_, err := db.Exec("DELETE FROM tagmap WHERE post_id=$1;", postId)
+	_, err := config.DB.Exec("DELETE FROM tagmap WHERE post_id=$1;", postId)
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec("DELETE FROM posts WHERE ID=$1 AND USER_ID=$2;", postId, userId)
+	_, err = config.DB.Exec("DELETE FROM posts WHERE ID=$1 AND USER_ID=$2;", postId, userId)
 	return err
 }
 
-func listPosts(limit, offset int, year int, tag string) ([]Post, bool, bool, error) {
+func listPosts(limit, offset int, year int, tag string) ([]posts.Post, bool, bool, error) {
 	var first bool
 	var last bool
 	var tags []sql.NullString
-	posts := make([]Post, 0)
+	postSlice := make([]posts.Post, 0)
 	rows, err := queryArchive(tag, year, limit, offset)
 	if err != nil {
 		log.Println(err)
-		return posts, false, false, err
+		return postSlice, false, false, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		post := Post{}
+		post := posts.Post{}
 		err := rows.Scan(&post.Id, &post.ImageURL, &post.Year, &post.CreatedAt, &post.UpdatedAt, &post.Edited, &post.UserId, &post.Title, &post.Description, pq.Array(&tags))
 		if err != nil {
-			return posts, false, false, err
+			return postSlice, false, false, err
 		}
 		for _, nullString := range tags {
 			if !nullString.Valid {
@@ -538,22 +506,22 @@ func listPosts(limit, offset int, year int, tag string) ([]Post, bool, bool, err
 			}
 			post.Tags = append(post.Tags, nullString.String)
 		}
-		posts = append(posts, post)
+		postSlice = append(postSlice, post)
 	}
 	err = rows.Err()
 	if err != nil {
-		return posts, false, false, err
+		return postSlice, false, false, err
 	}
-	if len(posts) <= limit {
+	if len(postSlice) <= limit {
 		last = true
 	}
-	if len(posts) > limit {
-		posts = posts[:len(posts)-1]
+	if len(postSlice) > limit {
+		postSlice = postSlice[:len(postSlice)-1]
 	}
 	if offset == 0 {
 		first = true
 	}
-	return posts, first, last, nil
+	return postSlice, first, last, nil
 }
 
 func listYears(tags []string) ([]int, error) {
@@ -582,7 +550,7 @@ func listYears(tags []string) ([]int, error) {
         ORDER BY posts.year ASC;
     `, filter)
 	// Prepare the query
-	stmt, err := db.Prepare(query)
+	stmt, err := config.DB.Prepare(query)
 	if err != nil {
 		return nil, err
 	}
@@ -611,10 +579,10 @@ func listYears(tags []string) ([]int, error) {
 	return years, nil
 }
 
-func listTagReps() ([]Post, error) {
+func listTagReps() ([]posts.Post, error) {
 	var tags []string
-	posts := make([]Post, 0)
-	rows, err := db.Query(`
+	postSlice := make([]posts.Post, 0)
+	rows, err := config.DB.Query(`
 		SELECT
 			MAX(posts.id) AS post_id,
 			posts.minio_url AS file,
@@ -634,20 +602,20 @@ func listTagReps() ([]Post, error) {
 		`)
 	if err != nil {
 		log.Println(err)
-		return posts, err
+		return postSlice, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		post := Post{}
+		post := posts.Post{}
 		err := rows.Scan(&post.Id, &post.ImageURL, pq.Array(&tags))
 		if err != nil {
-			return posts, err
+			return postSlice, err
 		}
 		post.Tags = tags
-		posts = append(posts, post)
+		postSlice = append(postSlice, post)
 	}
 	err = rows.Err()
-	return posts, err
+	return postSlice, err
 }
 
 func queryURL(req *http.Request) (int, int, int, string, error) {
@@ -693,10 +661,10 @@ func queryURL(req *http.Request) (int, int, int, string, error) {
 	return limit, offset, year, tag, nil
 }
 
-func getPost(postId int) (Post, error) {
-	post := Post{}
+func getPost(postId int) (posts.Post, error) {
+	post := posts.Post{}
 	var tags []sql.NullString
-	err := db.QueryRow(`
+	err := config.DB.QueryRow(`
 		SELECT posts.*, array_agg(tags.name) AS tags
 		FROM posts
 		LEFT JOIN tagmap ON posts.id = tagmap.post_id
@@ -774,13 +742,13 @@ func parseTags(tags string) []string {
 func createTags(postId *int, tags []string) error {
 	var tagId int
 	for _, tag := range cleanTags(tags) {
-		err := db.QueryRow(`
+		err := config.DB.QueryRow(`
 			INSERT INTO tags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = $1 RETURNING id;
 			`, tag).Scan(&tagId)
 		if err != nil {
 			return err
 		}
-		_, err = db.Exec(`
+		_, err = config.DB.Exec(`
 			INSERT INTO tagmap (post_id, tag_id)
 			VALUES ($1, $2)
 			ON CONFLICT (post_id, tag_id)
@@ -801,7 +769,7 @@ func computeHashSum(file io.Reader) string {
 }
 
 func newMinIO() (*minio.Client, error) {
-	endpoint := "nginx:9000"
+	endpoint := "localhost:9000"
 	accessKeyID := "minioadmin"
 	secretAccessKey := "minioadmin"
 	useSSL := false
@@ -861,7 +829,7 @@ func queryArchive(tag string, year, limit, offset int) (*sql.Rows, error) {
 	var err error
 	if year == 0 {
 		if tag == "" {
-			rows, err = db.Query(`
+			rows, err = config.DB.Query(`
 				SELECT p.*, array_agg(t.name) AS tags
 				FROM posts p
 				LEFT JOIN tagmap tm ON p.id = tm.post_id
@@ -872,7 +840,7 @@ func queryArchive(tag string, year, limit, offset int) (*sql.Rows, error) {
 				OFFSET $2;
 				`, limit+1, offset)
 		} else {
-			rows, err = db.Query(`
+			rows, err = config.DB.Query(`
 				SELECT p.*, array_agg(t.name) AS tags
 				FROM posts p
 				LEFT JOIN tagmap tm ON p.id = tm.post_id
@@ -886,7 +854,7 @@ func queryArchive(tag string, year, limit, offset int) (*sql.Rows, error) {
 		}
 	} else {
 		if tag == "" {
-			rows, err = db.Query(`
+			rows, err = config.DB.Query(`
 				SELECT p.*, array_agg(t.name) AS tags
 				FROM posts p
 				LEFT JOIN tagmap tm ON p.id = tm.post_id
@@ -898,7 +866,7 @@ func queryArchive(tag string, year, limit, offset int) (*sql.Rows, error) {
 				OFFSET $3;
 				`, year, limit+1, offset)
 		} else {
-			rows, err = db.Query(`
+			rows, err = config.DB.Query(`
 				SELECT p.*, array_agg(t.name) AS tags
 				FROM posts p
 				LEFT JOIN tagmap tm ON p.id = tm.post_id

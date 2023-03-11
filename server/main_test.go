@@ -2,17 +2,15 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"fmt"
-	"html/template"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"project/server/config"
 	"reflect"
 	"sort"
 	"strconv"
@@ -24,19 +22,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 )
-
-func init() {
-	var err error
-	db, err = sql.Open("postgres", "postgres://postgres:password@localhost/joepeijkens?sslmode=disable")
-	if err != nil {
-		panic(err)
-	}
-	if err = db.Ping(); err != nil {
-		panic(err)
-	}
-	log.Println("You connected to your database.")
-	publicTpl = template.Must(publicTpl.ParseGlob("../public/html/*"))
-}
 
 func TestIndexHandler(t *testing.T) {
 
@@ -71,7 +56,7 @@ func TestIndexHandler(t *testing.T) {
 func TestLoginHandler(t *testing.T) {
 	email, password := createTestUser()
 
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description    string
 		Email          string
@@ -119,7 +104,7 @@ func TestLoginHandler(t *testing.T) {
 
 func TestLogoutHandler(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description    string
 		Login          bool
@@ -156,7 +141,7 @@ func TestLogoutHandler(t *testing.T) {
 
 func TestRegisterHandler(t *testing.T) {
 	// Testing overall handler functionality, so expected total behavior.
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	name := "Test User"
 	type Test struct {
 		Description    string
@@ -209,7 +194,7 @@ func TestRegisterHandler(t *testing.T) {
 func TestUploadHandler(t *testing.T) {
 	// Arrange
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId, _ := login(email, password)
 	sessionID := uuid.NewV4().String()
 	sessionStore[sessionID] = *userId
@@ -273,7 +258,7 @@ func TestUploadHandler(t *testing.T) {
 
 func TestUpdateHandler(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId, _ := login(email, password)
 	sessionID := uuid.NewV4().String()
 	sessionStore[sessionID] = *userId
@@ -281,8 +266,8 @@ func TestUpdateHandler(t *testing.T) {
 
 	postId, _ := createPost("image", 2022, 1)
 	createTags(postId, []string{"test-tag"})
-	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 
 	// updatePost
 	form := url.Values{}
@@ -304,7 +289,7 @@ func TestUpdateHandler(t *testing.T) {
 
 func TestDeleteHandler(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 
 	createPost("test", 2022, 1)
 
@@ -346,11 +331,11 @@ func TestDeleteHandler(t *testing.T) {
 
 func TestListLastPostPerTag(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId, _ := login(email, password)
 	tags := []string{"tag1", "tag1", "tag2", "tag2", "tag3", "tag3", "tag4", "tag4"}
-	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 	for i, tag := range tags {
 		postId, _ := createPost(fmt.Sprintf("image-%d", i), 2022, *userId)
 		createTags(postId, []string{tag})
@@ -379,7 +364,7 @@ func TestListLastPostPerTag(t *testing.T) {
 func TestStoreFiles(t *testing.T) {
 	// Arrange
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId, _ := login(email, password)
 	sessionID := uuid.NewV4().String()
 	sessionStore[sessionID] = *userId
@@ -410,8 +395,8 @@ func TestStoreFiles(t *testing.T) {
 	if err := storeFiles(req); err != nil {
 		t.Fatalf("error writing files to local storage: %v", err)
 	}
-	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 
 	// Start MinIO client
 	minioClient, err := newMinIO()
@@ -452,7 +437,7 @@ func TestStoreFiles(t *testing.T) {
 	}
 	// check if tags were written to db
 	var outputTags []string
-	err = db.QueryRow(`
+	err = config.DB.QueryRow(`
 		SELECT array_agg(tags.name) AS tags
 		FROM tagmap
 		INNER JOIN tags ON tagmap.tag_id = tags.id
@@ -468,7 +453,7 @@ func TestStoreFiles(t *testing.T) {
 
 func TestLogin(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description   string
 		Email         string
@@ -493,7 +478,7 @@ func TestLogin(t *testing.T) {
 
 func TestDeleteSession(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	userId, _ := login(email, password)
 	sessionId := uuid.NewV4().String()
@@ -515,7 +500,7 @@ func TestDeleteSession(t *testing.T) {
 
 func TestCreateSession(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description   string
 		Email         string
@@ -542,7 +527,7 @@ func TestCreateSession(t *testing.T) {
 
 func TestGetLoginStatus(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId, _ := login(email, password)
 	sessionID := uuid.NewV4().String()
 	sessionStore[sessionID] = *userId
@@ -573,7 +558,7 @@ func TestGetLoginStatus(t *testing.T) {
 
 func TestGetUserIdAndHashedPassword(t *testing.T) {
 	email, password := createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description   string
 		Email         string
@@ -660,7 +645,7 @@ func TestVerifyRegistration(t *testing.T) {
 }
 
 func TestCreateUser(t *testing.T) {
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	hashedPassword := []byte("Password123")
 	email := "test@icloud.com"
 	name := "Test User"
@@ -691,7 +676,7 @@ func TestCreateUser(t *testing.T) {
 
 func TestCreatePost(t *testing.T) {
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId := 1
 	year := 2022
 	type Test struct {
@@ -722,14 +707,14 @@ func TestCreateTags(t *testing.T) {
 	var outputTags []string
 	inputTags := []string{"kermis", "lolly", "draaimolen", "roze"}
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	postId, _ := createPost("image", 2017, 1)
 	err := createTags(postId, inputTags)
 	if err != nil {
 		t.Error(("Tags should have been created."))
 	}
-	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 
 	query := `
 		SELECT array_agg(tags.name) AS tags
@@ -737,7 +722,7 @@ func TestCreateTags(t *testing.T) {
 		INNER JOIN tags ON tagmap.tag_id = tags.id
 		WHERE tagmap.post_id=1;
 		`
-	err = db.QueryRow(query).Scan(pq.Array(&outputTags))
+	err = config.DB.QueryRow(query).Scan(pq.Array(&outputTags))
 	if err != nil {
 		t.Error(("Tags should have been listed."))
 	}
@@ -789,7 +774,7 @@ func TestParseTags(t *testing.T) {
 
 func TestDeletePost(t *testing.T) {
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	var count int
 	type Test struct {
 		Description   string
@@ -805,7 +790,7 @@ func TestDeletePost(t *testing.T) {
 	for _, c := range cases {
 		createPost("image", 2022, 1)
 		deletePost(c.PostId, c.UserId)
-		rows, _ := db.Query("SELECT COUNT(*) FROM posts;")
+		rows, _ := config.DB.Query("SELECT COUNT(*) FROM posts;")
 		defer rows.Close()
 		for rows.Next() {
 			rows.Scan(&count)
@@ -886,9 +871,9 @@ func TestGetNavigationOffsets(t *testing.T) {
 
 func TestListPost(t *testing.T) {
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 	year := 2022
 	tags := []string{}
 	testCount := 3
@@ -932,9 +917,9 @@ func TestListPost(t *testing.T) {
 
 func TestListYears(t *testing.T) {
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 	tag1 := []string{"tag1"}
 	tag2 := []string{"tag2"}
 	tag12 := []string{"tag1", "tag2"}
@@ -1005,7 +990,7 @@ func TestListYears(t *testing.T) {
 
 func TestUpdatePost(t *testing.T) {
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	createPost("image", 2022, 1)
 	post, _ := getPost(1)
 	postCreatedAt := post.CreatedAt
@@ -1023,11 +1008,11 @@ func TestUpdatePost(t *testing.T) {
 
 func TestUpdateTags(t *testing.T) {
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	postId, _ := createPost("image", 2022, 1)
 	createTags(postId, []string{"test-tag"})
-	defer db.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
-	defer db.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 	inputTags := []string{"edited-test-tag", "extra-test-tag"}
 	err := updateTags(postId, inputTags)
 	if err != nil {
@@ -1044,7 +1029,7 @@ func TestUpdateTags(t *testing.T) {
 
 func TestGetPost(t *testing.T) {
 	createTestUser()
-	defer db.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	for i := 0; i <= 3; i++ {
 		imageName := fmt.Sprintf("image-%d", i)
 		createPost(imageName, 2022, 1)

@@ -2,6 +2,9 @@
 1. Replace nginx with localhost in main.go
 2. `sudo docker compose build`
 3. `sudo docker compose up -d minio1 minio2 minio3 minio4 nginx db`
+4. `cd server`
+5. comment out init from main.go
+5. `go test`
 
 ```bash
 sudo docker compose exec db psql -U postgres

@@ -27,7 +27,6 @@ import (
 
 func init() {
 	var err error
-	// db, err = sql.Open("postgres", os.Getenv("POSTGRES_DATA_SOURCE_NAME"))
 	db, err = sql.Open("postgres", "postgres://postgres:password@localhost/joepeijkens?sslmode=disable")
 	if err != nil {
 		panic(err)
@@ -36,7 +35,7 @@ func init() {
 		panic(err)
 	}
 	log.Println("You connected to your database.")
-	publicTpl = template.Must(template.ParseGlob("../public/html/*"))
+	publicTpl = template.Must(publicTpl.ParseGlob("../public/html/*"))
 }
 
 func TestIndexHandler(t *testing.T) {

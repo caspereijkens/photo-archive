@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"project/server/config"
 
 	"github.com/minio/minio-go"
 )
@@ -13,12 +14,7 @@ func ImageHandler(w http.ResponseWriter, req *http.Request) {
 	// Extract the filename from the URL path
 	filename := req.URL.Path[len("/blob/"):]
 
-	// Initialize a Minio client
-	endpoint := "localhost:9000"
-	accessKeyID := "minioadmin"
-	secretAccessKey := "minioadmin"
-	useSSL := false
-	minioClient, err := minio.New(endpoint, accessKeyID, secretAccessKey, useSSL)
+	minioClient, err := config.NewMinIO()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

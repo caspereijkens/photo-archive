@@ -2,6 +2,7 @@ package posts
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"project/server/config"
 	"project/server/users"
@@ -65,7 +66,8 @@ func UploadHandler(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodPost {
 		err := storeFiles(req)
 		if err != nil {
-			http.Error(w, "error storing file object", http.StatusInternalServerError)
+			log.Println(err)
+			http.Error(w, "error storing file object ", http.StatusInternalServerError)
 			return
 		}
 		http.Redirect(w, req, fmt.Sprintf("?year=%s", req.PostFormValue("year")), http.StatusSeeOther)

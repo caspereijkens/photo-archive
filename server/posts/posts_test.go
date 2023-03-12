@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"project/server/config"
-	"project/server/objects"
 	"project/server/users"
 	"reflect"
 	"sort"
@@ -830,7 +829,7 @@ func TestStoreFiles(t *testing.T) {
 	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
 
 	// Start MinIO client
-	minioClient, err := objects.NewMinIO()
+	minioClient, err := config.NewMinIO()
 	if err != nil {
 		t.Fatalf("error starting MinIO client: %v", err)
 	}

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"project/server/config"
-	"project/server/objects"
 	"project/server/users"
 	"strconv"
 	"strings"
@@ -444,7 +443,7 @@ func storeFiles(req *http.Request) error {
 	if err != nil {
 		return fmt.Errorf("error parsing form data: %v", err)
 	}
-	minioClient, err := objects.NewMinIO()
+	minioClient, err := config.NewMinIO()
 	if err != nil {
 		return fmt.Errorf("error creating minio client: %v", err)
 	}

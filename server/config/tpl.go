@@ -1,6 +1,10 @@
 package config
 
-import "html/template"
+import (
+	"html/template"
+	"path/filepath"
+	"runtime"
+)
 
 var fm = template.FuncMap{
 	"add": func(a, b int) int { return a + b },
@@ -8,6 +12,13 @@ var fm = template.FuncMap{
 var TPL = template.New("public").Funcs(fm)
 
 func init() {
-	TPL = template.Must(TPL.ParseGlob("../public/html/*.gohtml"))
-	// TPL = template.Must(TPL.ParseGlob("public/html/*.gohtml"))
+	_, filename, _, _ := runtime.Caller(0)
+
+	dir := filepath.Dir(filename)
+
+	baseDir := filepath.Join(dir, "../../")
+
+	filePattern := filepath.Join(baseDir, "public", "html", "*.gohtml")
+
+	TPL = template.Must(TPL.ParseGlob(filePattern))
 }

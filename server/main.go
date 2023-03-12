@@ -2,16 +2,11 @@ package main
 
 import (
 	"crypto/sha1"
-	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"mime"
 	"net/http"
-	"net/mail"
-	"net/url"
 	"path/filepath"
 	"project/server/config"
 	"project/server/posts"
@@ -19,13 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
 	"github.com/minio/minio-go"
-	uuid "github.com/satori/go.uuid"
-	"golang.org/x/crypto/bcrypt"
 )
-
-var sessionStore = make(map[string]int)
 
 func archiveHandler(w http.ResponseWriter, req *http.Request) {
 	type data struct {
@@ -43,7 +33,7 @@ func archiveHandler(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		http.Error(w, "invalid limit and/or offset", http.StatusForbidden)
 	}
-	posts, first, last, err := listPosts(limit, offset, year, tag)
+	posts, first, last, err := posts.ListPosts(limit, offset, year, tag)
 	if err != nil {
 		http.Error(w, "error retrieving posts from the database", http.StatusInternalServerError)
 	}
@@ -157,24 +147,6 @@ func uploadHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func createProperties(limit, offset, year int, tag string) (string, string, string) {
-	prevOffset, nextOffset := navigateOffsets(limit, offset)
-
-	var filterProperties string
-	if year > 0 {
-		filterProperties = "&year=" + strconv.Itoa(year)
-	}
-	if tag != "" {
-		filterProperties += "&tag=" + url.QueryEscape(tag)
-	}
-
-	properties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(offset) + filterProperties
-	prevProperties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(prevOffset) + filterProperties
-	nextProperties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(nextOffset) + filterProperties
-
-	return properties, prevProperties, nextProperties
-}
-
 func updateHandler(w http.ResponseWriter, req *http.Request) {
 	type data struct {
 		Post        posts.Post
@@ -191,7 +163,7 @@ func updateHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Malformatted post id", http.StatusForbidden)
 		return
 	}
-	post, err := getPost(postId)
+	post, err := posts.GetPost(postId)
 	if err != nil {
 		http.Error(w, "Error loading post. Please try again or contact administrator.", http.StatusInternalServerError)
 		return
@@ -208,7 +180,7 @@ func updateHandler(w http.ResponseWriter, req *http.Request) {
 		post.Year = year
 		post.Title = req.PostFormValue("title")
 		post.Description = req.PostFormValue("description")
-		err = updatePost(post)
+		err = posts.UpdatePost(post)
 		if err != nil {
 			http.Error(w, "Error updating post. Please try again or contact administrator.", http.StatusInternalServerError)
 			return
@@ -246,7 +218,7 @@ func deleteHandler(w http.ResponseWriter, req *http.Request) {
 		if err != nil {
 			http.Error(w, "requested post id is not valid", http.StatusForbidden)
 		}
-		err = deletePost(postId, *userId)
+		err = posts.DeletePost(postId, *userId)
 		if err != nil {
 			http.Error(w, "requested post could not be deleted", http.StatusForbidden)
 		}
@@ -336,354 +308,6 @@ func main() {
 	log.Fatal(http.ListenAndServe(":80", nil))
 }
 
-func verifyRegistration(w http.ResponseWriter, req *http.Request) (*string, *string, []byte, *string, error) {
-	name := req.PostFormValue("name")
-	email := req.PostFormValue("email")
-	role := req.PostFormValue("role")
-
-	_, err := mail.ParseAddress(email)
-	if err != nil {
-		http.Error(w, "Email is not of correct format.", http.StatusForbidden)
-		return nil, nil, nil, nil, err
-	}
-	if role != "admin" && role != "user" {
-		http.Error(w, "Role does not exist.", http.StatusForbidden)
-		return nil, nil, nil, nil, errors.New("role does not exist")
-	}
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.PostFormValue("password")), bcrypt.MinCost)
-	if err != nil {
-		http.Error(w, "Password could not be encrypted.", http.StatusForbidden)
-		return nil, nil, nil, nil, err
-	}
-	err = bcrypt.CompareHashAndPassword(hashedPassword, []byte(req.PostFormValue("repassword")))
-	if err != nil {
-		http.Error(w, "Entered passwords do not match.", http.StatusForbidden)
-		return nil, nil, nil, nil, err
-	}
-	return &name, &email, hashedPassword, &role, err
-}
-
-func createUser(w http.ResponseWriter, name *string, email *string, hashedPassword []byte, role *string) error {
-	_, err := config.DB.Exec(`
-		INSERT INTO users 
-		(NAME,EMAIL,HASHEDPASSWORD,ROLE) 
-		VALUES ($1, $2, $3, $4);`, *name, *email, string(hashedPassword), *role)
-	if err != nil {
-		http.Error(w, "User could not be created.", http.StatusForbidden)
-	}
-	return err
-}
-
-func getUserIdAndHashedPassword(email string) (*int, []byte, error) {
-	var userId int
-	var registeredHashedPassword []byte
-	err := config.DB.QueryRow("SELECT id, hashedpassword FROM users WHERE email=$1;", email).Scan(&userId, &registeredHashedPassword)
-	if err != nil {
-		return nil, nil, err
-	}
-	if registeredHashedPassword == nil {
-		return nil, nil, errors.New("password not found")
-	}
-	return &userId, registeredHashedPassword, nil
-}
-
-func createPost(minioUrl string, year int, userId int) (*int, error) {
-	var postId int
-	err := config.DB.QueryRow(`
-		INSERT INTO posts (MINIO_URL, YEAR, USER_ID) VALUES ($1, $2, $3) RETURNING ID;`,
-		minioUrl, year, userId).Scan(&postId)
-	if err != nil {
-		return nil, err
-	}
-	return &postId, nil
-}
-
-func updatePost(post posts.Post) error {
-	_, err := config.DB.Exec(`
-		UPDATE posts 
-		SET UPDATED_AT=NOW(), 
-			EDITED=TRUE, 
-			TITLE=$1, 
-			DESCRIPTION=$2,
-			YEAR=$3 
-		WHERE ID=$4 and USER_ID=$5;
-		`,
-		post.Title, post.Description, post.Year, post.Id, post.UserId)
-	return err
-}
-
-func updateTags(postId *int, tags []string) error {
-	config.DB.Exec("DELETE FROM tagmap WHERE post_id = $1;", *postId)
-	err := createTags(postId, tags)
-	return err
-}
-
-func login(email string, password []byte) (*int, error) {
-	userId, registeredHashedPassword, err := getUserIdAndHashedPassword(email)
-	if err != nil {
-		return nil, err
-	}
-	err = bcrypt.CompareHashAndPassword(registeredHashedPassword, password)
-	if err != nil {
-		return nil, err
-	}
-	return userId, nil
-}
-
-func createSession(w http.ResponseWriter, email string, password []byte) error {
-	userId, err := login(email, password)
-	if err != nil {
-		return err
-	}
-	sessionID := uuid.NewV4().String()
-	sessionStore[sessionID] = *userId
-	cookie := &http.Cookie{
-		Name:  "session",
-		Value: sessionID,
-	}
-	http.SetCookie(w, cookie)
-	return nil
-}
-
-func getLoginStatus(req *http.Request) (*int, bool) {
-	cookie, err := req.Cookie("session")
-	if err != nil {
-		return nil, false
-	}
-	sessionId := cookie.Value
-	userId, ok := sessionStore[sessionId]
-	if !ok {
-		return nil, false
-	}
-	return &userId, true
-}
-
-func deleteSession(req *http.Request) *http.Cookie {
-	cookie, err := req.Cookie("session")
-	if err != nil {
-		return nil
-	}
-	sessionId := cookie.Value
-	delete(sessionStore, sessionId)
-	cookie = &http.Cookie{
-		Name:   "session",
-		Value:  "",
-		MaxAge: -1,
-	}
-	return cookie
-}
-
-func deletePost(postId int, userId int) error {
-	_, err := config.DB.Exec("DELETE FROM tagmap WHERE post_id=$1;", postId)
-	if err != nil {
-		return err
-	}
-	_, err = config.DB.Exec("DELETE FROM posts WHERE ID=$1 AND USER_ID=$2;", postId, userId)
-	return err
-}
-
-func listPosts(limit, offset int, year int, tag string) ([]posts.Post, bool, bool, error) {
-	var first bool
-	var last bool
-	var tags []sql.NullString
-	postSlice := make([]posts.Post, 0)
-	rows, err := queryArchive(tag, year, limit, offset)
-	if err != nil {
-		log.Println(err)
-		return postSlice, false, false, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		post := posts.Post{}
-		err := rows.Scan(&post.Id, &post.ImageURL, &post.Year, &post.CreatedAt, &post.UpdatedAt, &post.Edited, &post.UserId, &post.Title, &post.Description, pq.Array(&tags))
-		if err != nil {
-			return postSlice, false, false, err
-		}
-		for _, nullString := range tags {
-			if !nullString.Valid {
-				continue
-			}
-			post.Tags = append(post.Tags, nullString.String)
-		}
-		postSlice = append(postSlice, post)
-	}
-	err = rows.Err()
-	if err != nil {
-		return postSlice, false, false, err
-	}
-	if len(postSlice) <= limit {
-		last = true
-	}
-	if len(postSlice) > limit {
-		postSlice = postSlice[:len(postSlice)-1]
-	}
-	if offset == 0 {
-		first = true
-	}
-	return postSlice, first, last, nil
-}
-
-func listYears(tags []string) ([]int, error) {
-	var year int
-	var years []int
-	var filter string
-	var rows *sql.Rows
-
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("tags are empty")
-	} else if len(tags) == 1 && tags[0] == "" {
-		filter = ""
-	} else {
-		filter = `
-			JOIN tagmap ON posts.id = tagmap.post_id 
-			WHERE tagmap.tag_id IN (
-				SELECT id FROM tags WHERE name IN ('` + strings.Join(tags, "','") + `')
-			)
-		`
-	}
-
-	query := fmt.Sprintf(`
-        SELECT DISTINCT posts.year 
-        FROM posts 
-		%s
-        ORDER BY posts.year ASC;
-    `, filter)
-	// Prepare the query
-	stmt, err := config.DB.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	defer stmt.Close()
-
-	// Execute the query
-	rows, err = stmt.Query()
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	// Iterate over the results
-	for rows.Next() {
-		err := rows.Scan(&year)
-		if err != nil {
-			return nil, err
-		}
-		years = append(years, year)
-	}
-
-	// Check for any errors during iteration
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-	return years, nil
-}
-
-func listTagReps() ([]posts.Post, error) {
-	var tags []string
-	postSlice := make([]posts.Post, 0)
-	rows, err := config.DB.Query(`
-		SELECT
-			MAX(posts.id) AS post_id,
-			posts.minio_url AS file,
-			ARRAY_AGG(tags.name) AS tags
-		FROM
-			(
-				SELECT tag_id, MAX(post_id) AS last_post_id
-				FROM tagmap
-				GROUP BY tag_id
-			) AS latest_post
-			JOIN tags ON tags.id = latest_post.tag_id
-			JOIN posts ON posts.id = latest_post.last_post_id
-		GROUP BY
-			posts.minio_url
-		ORDER BY
-			tags, MAX(posts.created_at) DESC;
-		`)
-	if err != nil {
-		log.Println(err)
-		return postSlice, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		post := posts.Post{}
-		err := rows.Scan(&post.Id, &post.ImageURL, pq.Array(&tags))
-		if err != nil {
-			return postSlice, err
-		}
-		post.Tags = tags
-		postSlice = append(postSlice, post)
-	}
-	err = rows.Err()
-	return postSlice, err
-}
-
-func queryURL(req *http.Request) (int, int, int, string, error) {
-	var limit int = 12
-	var limitOverride int
-	var offset int
-	var offsetOverride int
-	var year int
-	var yearOverride int
-	var tag string
-	var err error
-
-	q := req.URL.Query()
-
-	if reqTags, ok := q["tag"]; ok {
-		tag = reqTags[0]
-	}
-
-	if reqYear, ok := q["year"]; ok {
-		yearOverride, err = strconv.Atoi(reqYear[0])
-		if err != nil {
-			return limit, offset, year, tag, err
-		}
-		year = yearOverride
-	}
-
-	if reqLimit, ok := q["limit"]; ok {
-		limitOverride, err = strconv.Atoi(reqLimit[0])
-		if err != nil {
-			return limit, offset, year, tag, err
-		}
-		limit = roundToNearestLimit(limitOverride)
-	}
-
-	if reqOffset, ok := q["offset"]; ok {
-		offsetOverride, err = strconv.Atoi(reqOffset[0])
-		if err != nil {
-			return limit, offset, year, tag, err
-		}
-		offset = floorDivision(offsetOverride, limitOverride)
-	}
-
-	return limit, offset, year, tag, nil
-}
-
-func getPost(postId int) (posts.Post, error) {
-	post := posts.Post{}
-	var tags []sql.NullString
-	err := config.DB.QueryRow(`
-		SELECT posts.*, array_agg(tags.name) AS tags
-		FROM posts
-		LEFT JOIN tagmap ON posts.id = tagmap.post_id
-		LEFT JOIN tags ON tagmap.tag_id = tags.id
-		WHERE posts.id=$1
-		GROUP BY posts.id;
-	`, postId).Scan(&post.Id, &post.ImageURL, &post.Year, &post.CreatedAt, &post.UpdatedAt, &post.Edited, &post.UserId, &post.Title, &post.Description, pq.Array(&tags))
-	if err != nil {
-		return post, err
-	}
-	for _, nullString := range tags {
-		if !nullString.Valid {
-			continue
-		}
-		post.Tags = append(post.Tags, nullString.String)
-	}
-	return post, nil
-}
-
 func storeFiles(req *http.Request) error {
 	userId, ok := getLoginStatus(req)
 	if !ok {
@@ -717,45 +341,13 @@ func storeFiles(req *http.Request) error {
 			return fmt.Errorf("error storing file on S3: %v", err)
 		}
 		minioUrl := objectName
-		postId, err := createPost(minioUrl, year, *userId)
+		postId, err := posts.CreatePost(minioUrl, year, *userId)
 		if err != nil {
 			return fmt.Errorf("error inserting post in database: %v", err)
 		}
 		err = createTags(postId, tags)
 		if err != nil {
 			return fmt.Errorf("error creating tags for this post in database: %v", err)
-		}
-	}
-	return nil
-}
-
-func parseTags(tags string) []string {
-	tagList := strings.Split(tags, ",")
-
-	for i := range tagList {
-		tagList[i] = strings.ToLower(strings.TrimSpace(tagList[i]))
-	}
-
-	return tagList
-}
-
-func createTags(postId *int, tags []string) error {
-	var tagId int
-	for _, tag := range cleanTags(tags) {
-		err := config.DB.QueryRow(`
-			INSERT INTO tags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = $1 RETURNING id;
-			`, tag).Scan(&tagId)
-		if err != nil {
-			return err
-		}
-		_, err = config.DB.Exec(`
-			INSERT INTO tagmap (post_id, tag_id)
-			VALUES ($1, $2)
-			ON CONFLICT (post_id, tag_id)
-			DO UPDATE SET post_id = EXCLUDED.post_id;
-		`, *postId, tagId)
-		if err != nil {
-			return err
 		}
 	}
 	return nil
@@ -775,114 +367,4 @@ func newMinIO() (*minio.Client, error) {
 	useSSL := false
 	minioClient, err := minio.New(endpoint, accessKeyID, secretAccessKey, useSSL)
 	return minioClient, err
-}
-
-func roundToNearestLimit(n int) int {
-	// Create an array of the possible rounding values
-	roundingValues := []int{12, 24, 48}
-
-	// Initialize the result as the first rounding value
-	result := roundingValues[0]
-
-	// Find the nearest rounding value
-	for _, val := range roundingValues {
-		if abs(val-n) < abs(result-n) {
-			result = val
-		}
-	}
-
-	return result
-}
-
-func navigateOffsets(limit, offset int) (int, int) {
-	offset = floorDivision(offset, limit)
-	nextOffset := floorDivision(offset+limit, limit)
-	prevOffset := floorDivision(offset-limit, limit)
-	return prevOffset, nextOffset
-}
-
-func floorDivision(dividend, divisor int) int {
-	quotient := int(math.Max(float64(dividend), 0)) / divisor
-
-	return quotient * divisor
-}
-
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-func cleanTags(tags []string) []string {
-	cleanTags := []string{}
-	for _, str := range tags {
-		if str != "" {
-			cleanTags = append(cleanTags, strings.ToLower(str))
-		}
-	}
-	return cleanTags
-}
-
-func queryArchive(tag string, year, limit, offset int) (*sql.Rows, error) {
-	var rows *sql.Rows
-	var err error
-	if year == 0 {
-		if tag == "" {
-			rows, err = config.DB.Query(`
-				SELECT p.*, array_agg(t.name) AS tags
-				FROM posts p
-				LEFT JOIN tagmap tm ON p.id = tm.post_id
-				LEFT JOIN tags t ON tm.tag_id = t.id
-				GROUP BY p.id
-				ORDER BY p.updated_at DESC
-				LIMIT $1
-				OFFSET $2;
-				`, limit+1, offset)
-		} else {
-			rows, err = config.DB.Query(`
-				SELECT p.*, array_agg(t.name) AS tags
-				FROM posts p
-				LEFT JOIN tagmap tm ON p.id = tm.post_id
-				LEFT JOIN tags t ON tm.tag_id = t.id
-				GROUP BY p.id
-				HAVING count(CASE WHEN t.name = $1 THEN 1 ELSE NULL END) >= 1
-				ORDER BY p.updated_at DESC
-				LIMIT $2
-				OFFSET $3;
-				`, tag, limit+1, offset)
-		}
-	} else {
-		if tag == "" {
-			rows, err = config.DB.Query(`
-				SELECT p.*, array_agg(t.name) AS tags
-				FROM posts p
-				LEFT JOIN tagmap tm ON p.id = tm.post_id
-				LEFT JOIN tags t ON tm.tag_id = t.id
-				WHERE p.year = $1
-				GROUP BY p.id
-				ORDER BY p.updated_at DESC
-				LIMIT $2
-				OFFSET $3;
-				`, year, limit+1, offset)
-		} else {
-			rows, err = config.DB.Query(`
-				SELECT p.*, array_agg(t.name) AS tags
-				FROM posts p
-				LEFT JOIN tagmap tm ON p.id = tm.post_id
-				LEFT JOIN tags t ON tm.tag_id = t.id
-				WHERE p.year = $1
-				GROUP BY p.id
-				HAVING count(CASE WHEN t.name = $2 THEN 1 ELSE NULL END) >= 1
-				ORDER BY p.updated_at DESC
-				LIMIT $3
-				OFFSET $4;
-				`, year, tag, limit+1, offset)
-		}
-	}
-	if err != nil {
-		log.Printf("Error querying the archive: %v\n", err)
-	}
-
-	return rows, err
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"database/sql"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"math"
@@ -336,7 +337,7 @@ func listTagReps() ([]Post, error) {
 	return postSlice, err
 }
 
-func createProperties(limit, offset, year int, tag string) (string, string, string) {
+func createProperties(limit, offset, year int, tag string) (template.URL, template.URL, template.URL) {
 	prevOffset, nextOffset := navigateOffsets(limit, offset)
 
 	var filterProperties string
@@ -347,9 +348,9 @@ func createProperties(limit, offset, year int, tag string) (string, string, stri
 		filterProperties += "&tag=" + url.QueryEscape(tag)
 	}
 
-	properties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(offset) + filterProperties
-	prevProperties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(prevOffset) + filterProperties
-	nextProperties := "limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(nextOffset) + filterProperties
+	properties := template.URL("limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(offset) + filterProperties)
+	prevProperties := template.URL("limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(prevOffset) + filterProperties)
+	nextProperties := template.URL("limit=" + strconv.Itoa(limit) + "&offset=" + strconv.Itoa(nextOffset) + filterProperties)
 
 	return properties, prevProperties, nextProperties
 }

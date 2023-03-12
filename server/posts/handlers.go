@@ -2,6 +2,7 @@ package posts
 
 import (
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"project/server/config"
@@ -16,9 +17,9 @@ func ArchiveHandler(w http.ResponseWriter, req *http.Request) {
 		LoggedIn       bool
 		First          bool
 		Last           bool
-		Properties     string
-		PrevProperties string
-		NextProperties string
+		Properties     template.URL
+		PrevProperties template.URL
+		NextProperties template.URL
 		Years          []int
 		Tag            string
 	}

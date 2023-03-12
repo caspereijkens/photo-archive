@@ -13,7 +13,7 @@ import (
 )
 
 func TestLogin(t *testing.T) {
-	email, password := createTestUser()
+	email, password := CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description   string
@@ -27,7 +27,7 @@ func TestLogin(t *testing.T) {
 		{"user does not exist", "wrong_email", password, true},
 	}
 	for _, c := range cases {
-		userId, err := login(c.Email, c.Password)
+		userId, err := Login(c.Email, c.Password)
 		if (err != nil) != c.ExpectedError {
 			t.Errorf("Test '%s' failed because an error was expected.", c.Description)
 		}
@@ -38,12 +38,12 @@ func TestLogin(t *testing.T) {
 }
 
 func TestDeleteSession(t *testing.T) {
-	email, password := createTestUser()
+	email, password := CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
-	userId, _ := login(email, password)
+	userId, _ := Login(email, password)
 	sessionId := uuid.NewV4().String()
-	sessionStore[sessionId] = *userId
+	SessionStore[sessionId] = *userId
 	cookie := &http.Cookie{
 		Name:  "session",
 		Value: sessionId,
@@ -53,14 +53,14 @@ func TestDeleteSession(t *testing.T) {
 	if (cookie.Value != "") || (cookie.MaxAge != -1) {
 		t.Error("Test failed because the cookie is invalid.")
 	}
-	_, ok := sessionStore[sessionId]
+	_, ok := SessionStore[sessionId]
 	if ok {
 		t.Error("Test failed because the session Id was not removed from the sessions table.")
 	}
 }
 
 func TestCreateSession(t *testing.T) {
-	email, password := createTestUser()
+	email, password := CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description   string
@@ -87,11 +87,11 @@ func TestCreateSession(t *testing.T) {
 }
 
 func TestGetLoginStatus(t *testing.T) {
-	email, password := createTestUser()
+	email, password := CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
-	userId, _ := login(email, password)
+	userId, _ := Login(email, password)
 	sessionID := uuid.NewV4().String()
-	sessionStore[sessionID] = *userId
+	SessionStore[sessionID] = *userId
 
 	type Test struct {
 		Description   string
@@ -107,7 +107,7 @@ func TestGetLoginStatus(t *testing.T) {
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodPost, "/test", nil)
 		req.AddCookie(c.Cookie)
-		userId, loggedIn := getLoginStatus(req)
+		userId, loggedIn := GetLoginStatus(req)
 		if loggedIn != c.ExpectedLogin {
 			t.Errorf("Test '%s' failed because a different login status was expected.", c.Description)
 		}
@@ -118,7 +118,7 @@ func TestGetLoginStatus(t *testing.T) {
 }
 
 func TestGetUserIdAndHashedPassword(t *testing.T) {
-	email, password := createTestUser()
+	email, password := CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	type Test struct {
 		Description   string
@@ -235,13 +235,140 @@ func TestCreateUser(t *testing.T) {
 
 }
 
-func createTestUser() (string, []byte) {
-	w := httptest.NewRecorder()
+func TestLoginHandler(t *testing.T) {
+	email, password := CreateTestUser()
+
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	type Test struct {
+		Description    string
+		Email          string
+		Password       string
+		Login          bool
+		ExpectedError  bool
+		ExpectedStatus int
+	}
+	cases := []Test{
+		{"happy flow", email, string(password), false, false, http.StatusSeeOther},
+		{"wrong password", email, "wrongPassword", false, true, http.StatusForbidden},
+		{"user does not exist", "wrong_email", string(password), false, true, http.StatusForbidden},
+		{"already logged in", email, string(password), true, false, http.StatusSeeOther},
+	}
+	for _, c := range cases {
+		form := url.Values{}
+		form.Set("email", c.Email)
+		form.Add("password", c.Password)
+		body := form.Encode()
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if c.Login {
+			userId, _ := Login(email, password)
+			sessionID := uuid.NewV4().String()
+			SessionStore[sessionID] = *userId
+			cookie := &http.Cookie{
+				Name:  "session",
+				Value: sessionID,
+			}
+			req.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		LoginHandler(w, req)
+		if !c.Login {
+			cookie := w.Header().Get("Set-Cookie")
+			if (cookie == "") != c.ExpectedError {
+				t.Errorf("Test '%s' failed because the cookie was not set properly.", c.Description)
+			}
+		}
+		if w.Code != c.ExpectedStatus {
+			t.Errorf("For test '%s' http response is not %d", c.Description, c.ExpectedStatus)
+		}
+	}
+}
+
+func TestLogoutHandler(t *testing.T) {
+	email, password := CreateTestUser()
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	type Test struct {
+		Description    string
+		Login          bool
+		ExpectedError  bool
+		ExpectedStatus int
+	}
+	cases := []Test{
+		{"happy flow", true, false, http.StatusSeeOther},
+		{"not logged in", false, true, http.StatusSeeOther},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+		if c.Login {
+			userId, _ := Login(email, password)
+			sessionID := uuid.NewV4().String()
+			SessionStore[sessionID] = *userId // necessary?
+			cookie := &http.Cookie{
+				Name:  "session",
+				Value: sessionID,
+			}
+			req.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		LogoutHandler(w, req)
+		cookie := w.Header().Get("Set-Cookie")
+		if (cookie != "session=; Max-Age=0") != c.ExpectedError {
+			t.Errorf("Test '%s' failed because the cookie was not set properly.", c.Description)
+		}
+		if w.Code != c.ExpectedStatus {
+			t.Errorf("For test '%s' http response is not %d", c.Description, c.ExpectedStatus)
+		}
+	}
+}
+
+func TestRegisterHandler(t *testing.T) {
+	// Testing overall handler functionality, so expected total behavior.
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	name := "Test User"
-	email := "test@icloud.com"
-	password := []byte("Password123")
-	hashedPassword, _ := bcrypt.GenerateFromPassword(password, bcrypt.MinCost)
-	role := "user"
-	createUser(w, &name, &email, hashedPassword, &role)
-	return email, password
+	type Test struct {
+		Description    string
+		Name           string
+		Email          string
+		Password       string
+		Repassword     string
+		Role           string
+		Login          bool
+		ExpectedStatus int
+	}
+	cases := []Test{
+		{"happy flow 1", name, "test@icloud.com", "Password123", "Password123", "user", false, http.StatusSeeOther},
+		{"happy flow 2", name, "admin_user_test@icloud.com", "Password123", "Password123", "admin", false, http.StatusSeeOther},
+		{"password mismatch", name, "test@icloud.com", "Password123", "WrongPassword123", "user", false, http.StatusForbidden},
+		{"invalid email", name, "test_icloud.com", "Password123", "Password123", "user", false, http.StatusForbidden},
+		{"invalid role", name, "test@icloud.com", "Password123", "Password123", "non-existent role", false, http.StatusForbidden},
+		{"duplicate entry", name, "test@icloud.com", "Password123", "Password123", "user", false, http.StatusForbidden},
+		{"already logged in", name, "test@icloud.com", "Password123", "Password123", "user", true, http.StatusSeeOther},
+	}
+
+	for _, c := range cases {
+		form := url.Values{}
+		form.Set("name", c.Name)
+		form.Add("email", c.Email)
+		form.Add("password", c.Password)
+		form.Add("repassword", c.Repassword)
+		form.Add("role", c.Role)
+		body := form.Encode()
+		req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if c.Login {
+			userId, _ := Login(c.Email, []byte(c.Password))
+			sessionID := uuid.NewV4().String()
+			SessionStore[sessionID] = *userId
+			cookie := &http.Cookie{
+				Name:  "session",
+				Value: sessionID,
+			}
+			req.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		RegisterHandler(w, req)
+		if w.Code != c.ExpectedStatus {
+			t.Errorf("For test '%s' http response is not %d", c.Description, c.ExpectedStatus)
+		}
+	}
 }

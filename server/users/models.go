@@ -3,6 +3,7 @@ package users
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/mail"
 	"project/server/config"
 
@@ -10,7 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var sessionStore = make(map[string]int)
+var SessionStore = make(map[string]int)
 
 func verifyRegistration(w http.ResponseWriter, req *http.Request) (*string, *string, []byte, *string, error) {
 	name := req.PostFormValue("name")
@@ -63,7 +64,7 @@ func getUserIdAndHashedPassword(email string) (*int, []byte, error) {
 	return &userId, registeredHashedPassword, nil
 }
 
-func login(email string, password []byte) (*int, error) {
+func Login(email string, password []byte) (*int, error) {
 	userId, registeredHashedPassword, err := getUserIdAndHashedPassword(email)
 	if err != nil {
 		return nil, err
@@ -76,12 +77,12 @@ func login(email string, password []byte) (*int, error) {
 }
 
 func createSession(w http.ResponseWriter, email string, password []byte) error {
-	userId, err := login(email, password)
+	userId, err := Login(email, password)
 	if err != nil {
 		return err
 	}
 	sessionID := uuid.NewV4().String()
-	sessionStore[sessionID] = *userId
+	SessionStore[sessionID] = *userId
 	cookie := &http.Cookie{
 		Name:  "session",
 		Value: sessionID,
@@ -90,13 +91,13 @@ func createSession(w http.ResponseWriter, email string, password []byte) error {
 	return nil
 }
 
-func getLoginStatus(req *http.Request) (*int, bool) {
+func GetLoginStatus(req *http.Request) (*int, bool) {
 	cookie, err := req.Cookie("session")
 	if err != nil {
 		return nil, false
 	}
 	sessionId := cookie.Value
-	userId, ok := sessionStore[sessionId]
+	userId, ok := SessionStore[sessionId]
 	if !ok {
 		return nil, false
 	}
@@ -109,11 +110,22 @@ func deleteSession(req *http.Request) *http.Cookie {
 		return nil
 	}
 	sessionId := cookie.Value
-	delete(sessionStore, sessionId)
+	delete(SessionStore, sessionId)
 	cookie = &http.Cookie{
 		Name:   "session",
 		Value:  "",
 		MaxAge: -1,
 	}
 	return cookie
+}
+
+func CreateTestUser() (string, []byte) {
+	w := httptest.NewRecorder()
+	name := "Test User"
+	email := "test@icloud.com"
+	password := []byte("Password123")
+	hashedPassword, _ := bcrypt.GenerateFromPassword(password, bcrypt.MinCost)
+	role := "user"
+	createUser(w, &name, &email, hashedPassword, &role)
+	return email, password
 }

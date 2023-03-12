@@ -1,22 +1,30 @@
 package posts
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"project/server/config"
+	"project/server/objects"
+	"project/server/users"
 	"reflect"
 	"sort"
 	"strconv"
 	"testing"
 
 	"github.com/lib/pq"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/minio/minio-go"
+	uuid "github.com/satori/go.uuid"
 )
 
 func TestGetPost(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	for i := 0; i <= 3; i++ {
 		imageName := fmt.Sprintf("image-%d", i)
@@ -29,7 +37,7 @@ func TestGetPost(t *testing.T) {
 }
 
 func TestUpdatePost(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	CreatePost("image", 2022, 1)
 	post, _ := GetPost(1)
@@ -46,19 +54,8 @@ func TestUpdatePost(t *testing.T) {
 	}
 }
 
-func createTestUser() (string, []byte) {
-	w := httptest.NewRecorder()
-	name := "Test User"
-	email := "test@icloud.com"
-	password := []byte("Password123")
-	hashedPassword, _ := bcrypt.GenerateFromPassword(password, bcrypt.MinCost)
-	role := "user"
-	createUser(w, &name, &email, hashedPassword, &role)
-	return email, password
-}
-
 func TestListPost(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
 	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
@@ -103,7 +100,7 @@ func TestListPost(t *testing.T) {
 }
 
 func TestCreatePost(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId := 1
 	year := 2022
@@ -132,7 +129,7 @@ func TestCreatePost(t *testing.T) {
 }
 
 func TestListLastPostPerTag(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	userId := 1
 	tags := []string{"tag1", "tag1", "tag2", "tag2", "tag3", "tag3", "tag4", "tag4"}
@@ -164,7 +161,7 @@ func TestListLastPostPerTag(t *testing.T) {
 }
 
 func TestDeletePost(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	var count int
 	type Test struct {
@@ -365,7 +362,7 @@ func TestCreateNavigationProperties(t *testing.T) {
 func TestCreateTags(t *testing.T) {
 	var outputTags []string
 	inputTags := []string{"kermis", "lolly", "draaimolen", "roze"}
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	postId, _ := CreatePost("image", 2017, 1)
 	err := createTags(postId, inputTags)
@@ -500,7 +497,7 @@ func TestGetNavigationOffsets(t *testing.T) {
 }
 
 func TestListYears(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
 	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
@@ -573,7 +570,7 @@ func TestListYears(t *testing.T) {
 }
 
 func TestUpdateTags(t *testing.T) {
-	createTestUser()
+	users.CreateTestUser()
 	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
 	postId, _ := CreatePost("image", 2022, 1)
 	createTags(postId, []string{"test-tag"})
@@ -625,4 +622,262 @@ func sameContents(slice1, slice2 []int) bool {
 	}
 
 	return true
+}
+
+func TestIndexHandler(t *testing.T) {
+
+	type Test struct {
+		Description    string
+		Target         string
+		ExpectedStatus int
+	}
+	cases := []Test{
+		{"happy flow 1", "/", http.StatusOK},
+		{"happy flow 2", "/archive?year=2022&limit=50", http.StatusOK},
+		{"happy flow 3", "/archive?year=2022&limit=50&tag=kermis", http.StatusOK},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, c.Target, nil)
+		w := httptest.NewRecorder()
+		ArchiveHandler(w, req)
+		if w.Code != c.ExpectedStatus {
+			t.Errorf("Test '%s' failed because http response is '%d' instead of %d", c.Description, w.Code, c.ExpectedStatus)
+		}
+		res := w.Result()
+		defer res.Body.Close()
+		_, err := io.ReadAll(res.Body)
+		// This of course should test the logic of the handlerFunc instead of testing te basic functionality
+		if err != nil {
+			t.Error("Failed to write to body.")
+		}
+
+	}
+}
+
+func TestUploadHandler(t *testing.T) {
+	// Arrange
+	email, password := users.CreateTestUser()
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	userId, _ := users.Login(email, password)
+	sessionID := uuid.NewV4().String()
+	users.SessionStore[sessionID] = *userId
+	cookie := &http.Cookie{Name: "session", Value: sessionID}
+
+	// create a multipart form
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	fw, _ := w.CreateFormFile("file", filepath.Join("test_data", "martian.jpg"))
+	src, _ := os.Open(filepath.Join("test_data", "martian.jpg"))
+	src.Seek(0, 0)
+	io.Copy(fw, src)
+	w.Close()
+
+	type Test struct {
+		Description    string
+		Login          bool
+		CorruptFile    bool
+		ExpectedStatus int
+	}
+
+	cases := []Test{
+		{"happy flow", true, false, http.StatusSeeOther},
+		{"not authenticated", false, false, http.StatusSeeOther},
+		{"corrupted file", true, true, http.StatusInternalServerError},
+	}
+	// create a new request
+	for _, c := range cases {
+		if c.CorruptFile {
+			var b bytes.Buffer
+			w := multipart.NewWriter(&b)
+			fw, _ := w.CreateFormFile("file", filepath.Join("test_data", "martian.jpg"))
+			src, _ := os.Open(filepath.Join("test_data", "martian.jpg"))
+			src.Seek(0, 0)
+			io.Copy(fw, src)
+			b.WriteString("corrupted")
+			w.Close()
+		}
+		req, _ := http.NewRequest("POST", "/upload", &b)
+		req.Header.Add("Content-Type", w.FormDataContentType())
+
+		// Add PostForm values
+		form := url.Values{}
+		form.Add("year", "2022")
+		req.PostForm = form
+		wr := httptest.NewRecorder()
+		if c.Login {
+			req.AddCookie(cookie)
+		}
+
+		// call the function
+		UploadHandler(wr, req)
+		if wr.Code != c.ExpectedStatus {
+			t.Errorf("Test '%s' failed because status %d was expected.", c.Description, c.ExpectedStatus)
+		}
+
+	}
+
+	// TODO test if redirected to right url
+}
+
+func TestUpdateHandler(t *testing.T) {
+	email, password := users.CreateTestUser()
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	userId, _ := users.Login(email, password)
+	sessionID := uuid.NewV4().String()
+	users.SessionStore[sessionID] = *userId
+	cookie := &http.Cookie{Name: "session", Value: sessionID}
+
+	postId, _ := CreatePost("image", 2022, 1)
+	createTags(postId, []string{"test-tag"})
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+
+	// updatePost
+	form := url.Values{}
+	form.Set("id", "1")
+	form.Add("year", "2021")
+	form.Add("title", "New Title")
+	form.Add("description", "New Description")
+	form.Add("tags", "new-test-tag,extra-test-tag")
+	req := httptest.NewRequest(http.MethodPost, "/update/1", nil)
+	req.PostForm = form
+	req.AddCookie(cookie)
+
+	w := httptest.NewRecorder()
+	UpdateHandler(w, req)
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("Post was not successfully updated.")
+	}
+}
+
+func TestDeleteHandler(t *testing.T) {
+	email, password := users.CreateTestUser()
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+
+	CreatePost("test", 2022, 1)
+
+	type Test struct {
+		Descripion     string
+		Login          bool
+		Target         string
+		ExpectedStatus int
+	}
+
+	cases := []Test{
+		{"Not authenticated", false, "/delete/1", http.StatusSeeOther},
+		{"Happy flow", true, "/delete/1", http.StatusSeeOther},
+		{"Already removed", true, "/delete/1", http.StatusSeeOther},
+		{"Does not exist", true, "/delete/5", http.StatusSeeOther},
+		{"Invalid post id", true, "/delete/corrupt", http.StatusForbidden},
+	}
+
+	for _, c := range cases {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, c.Target, nil)
+		if c.Login {
+			userId, _ := users.Login(email, password)
+			sessionID := uuid.NewV4().String()
+			users.SessionStore[sessionID] = *userId // necessary?
+			cookie := &http.Cookie{
+				Name:  "session",
+				Value: sessionID,
+			}
+			req.AddCookie(cookie)
+		}
+		DeleteHandler(w, req)
+		if w.Code != c.ExpectedStatus {
+			t.Errorf("Test '%s' failed because a different status code was expected (%d != %d)", c.Descripion, c.ExpectedStatus, w.Code)
+		}
+	}
+
+}
+
+func TestStoreFiles(t *testing.T) {
+	// Arrange
+	email, password := users.CreateTestUser()
+	defer config.DB.Exec("TRUNCATE TABLE users RESTART IDENTITY CASCADE;")
+	userId, _ := users.Login(email, password)
+	sessionID := uuid.NewV4().String()
+	users.SessionStore[sessionID] = *userId
+	cookie := &http.Cookie{Name: "session", Value: sessionID}
+
+	// create a multipart form
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	fw, _ := w.CreateFormFile("file", filepath.Join("test_data", "martian.jpg"))
+	src, _ := os.Open(filepath.Join("test_data", "martian.jpg"))
+	srcHash := computeHashSum(src)
+	src.Seek(0, 0)
+	io.Copy(fw, src)
+
+	w.Close()
+
+	// create a new request
+	req, _ := http.NewRequest("POST", "/upload", &b)
+	req.Header.Add("Content-Type", w.FormDataContentType())
+
+	// Add PostForm values
+	form := url.Values{}
+	form.Add("year", "2022")
+	form.Add("tags", "kermis,tilburg,kei")
+	req.PostForm = form
+	req.AddCookie(cookie)
+	// call the function
+	if err := storeFiles(req); err != nil {
+		t.Fatalf("error writing files to local storage: %v", err)
+	}
+	defer config.DB.Exec("TRUNCATE TABLE tags RESTART IDENTITY CASCADE;")
+	defer config.DB.Exec("TRUNCATE TABLE tagmap RESTART IDENTITY CASCADE;")
+
+	// Start MinIO client
+	minioClient, err := objects.NewMinIO()
+	if err != nil {
+		t.Fatalf("error starting MinIO client: %v", err)
+	}
+	objectName := fmt.Sprintf("2022/%x.jpg", srcHash)
+	bucket := "download"
+	defer minioClient.RemoveObject(bucket, objectName)
+	// check if the file was written to minio storage
+	dstInfo, err := minioClient.GetObjectACL(bucket, objectName)
+	if err != nil {
+		t.Fatalf("error retrieving object from MinIO: %v", err)
+	}
+	if dstInfo.Size == 0 {
+		t.Fatal("Stored object has no size")
+	}
+	// Check if object can be loaded
+	dst, err := minioClient.GetObject(bucket, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatalf("error retrieving object from MinIO: %v", err)
+	}
+	defer dst.Close()
+
+	// check if the file hash is the same
+	dstHash := computeHashSum(dst)
+	if srcHash != dstHash {
+		t.Fatal("error the file was written to local storage with loss")
+	}
+
+	// check if a post was written to the db
+	post, err := GetPost(1)
+	if err != nil {
+		t.Fatalf("error retrieving post from database: %v", err)
+	}
+	if post.ImageURL == "" {
+		t.Fatal("error as the post was not written to the database")
+	}
+	// check if tags were written to db
+	var outputTags []string
+	err = config.DB.QueryRow(`
+		SELECT array_agg(tags.name) AS tags
+		FROM tagmap
+		INNER JOIN tags ON tagmap.tag_id = tags.id
+		WHERE tagmap.post_id = 1;
+		`).Scan(pq.Array(&outputTags))
+	if err != nil {
+		t.Error(("Tags should have been listed."))
+	}
+	if len(outputTags) != 3 {
+		t.Errorf("Number of tags listed is incorrect %d!=%d.", 3, len(outputTags))
+	}
 }

@@ -1,18 +1,23 @@
 package posts
 
 import (
+	"crypto/sha1"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
 	"net/url"
 	"project/server/config"
+	"project/server/objects"
+	"project/server/users"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/minio/minio-go"
 )
 
 type Post struct {
@@ -428,4 +433,56 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+func storeFiles(req *http.Request) error {
+	userId, ok := users.GetLoginStatus(req)
+	if !ok {
+		return fmt.Errorf("request is unauthenticated")
+	}
+	err := req.ParseMultipartForm(10000000) // max 10 megabytes
+	if err != nil {
+		return fmt.Errorf("error parsing form data: %v", err)
+	}
+	minioClient, err := objects.NewMinIO()
+	if err != nil {
+		return fmt.Errorf("error creating minio client: %v", err)
+	}
+	year, err := strconv.Atoi(req.PostFormValue("year"))
+	if err != nil {
+		return fmt.Errorf("'year' is not an integer: %v", err)
+	}
+	tags := parseTags(req.PostFormValue("tags"))
+	fileHeaders := req.MultipartForm.File["file"]
+	for _, fileHeader := range fileHeaders {
+		src, err := fileHeader.Open()
+		if err != nil {
+			return fmt.Errorf("error opening file: %v", err)
+		}
+		defer src.Close()
+		hashSum := computeHashSum(src)
+		ext := strings.Split(fileHeader.Filename, ".")[1]
+		objectName := req.PostFormValue("year") + "/" + fmt.Sprintf("%x", hashSum) + "." + ext
+		_, err = minioClient.PutObject("download", objectName, src, fileHeader.Size, minio.PutObjectOptions{ContentType: "image/jpeg"})
+		if err != nil {
+			return fmt.Errorf("error storing file on S3: %v", err)
+		}
+		minioUrl := objectName
+		postId, err := CreatePost(minioUrl, year, *userId)
+		if err != nil {
+			return fmt.Errorf("error inserting post in database: %v", err)
+		}
+		err = createTags(postId, tags)
+		if err != nil {
+			return fmt.Errorf("error creating tags for this post in database: %v", err)
+		}
+	}
+	return nil
+}
+
+func computeHashSum(file io.Reader) string {
+	h := sha1.New()
+	io.Copy(h, io.TeeReader(file, h))
+	hashSum := fmt.Sprintf("%x", h.Sum(nil))
+	return hashSum
 }

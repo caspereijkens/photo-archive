@@ -26,7 +26,7 @@ func main() {
 	http.HandleFunc("/contact", contactHandler)
 	http.HandleFunc("/logout", users.LogoutHandler)
 	http.HandleFunc("/", posts.TagRepHandler)
-	http.HandleFunc("/register", users.RegisterHandler)
+	// http.HandleFunc("/register", users.RegisterHandler)
 	http.HandleFunc("/upload", posts.UploadHandler)
 	http.HandleFunc("/update/", posts.UpdateHandler)
 	http.HandleFunc("/blob/", objects.ImageHandler)
